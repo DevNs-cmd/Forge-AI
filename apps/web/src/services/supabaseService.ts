@@ -175,6 +175,36 @@ export const getCurrentSession = async () => {
   return data.session;
 };
 
+export const getCurrentUserProfile = async (userId: string): Promise<UserProfile | null> => {
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', userId)
+      .single();
+    if (error || !data) return null;
+    return {
+      id: data.id,
+      userId: data.id,
+      username: data.username || data.email?.split('@')[0] || 'user',
+      fullName: data.full_name || 'Forge Member',
+      email: data.email,
+      role: data.role || 'founder',
+      avatarUrl: data.avatar_url,
+      createdAt: data.created_at
+    };
+  } catch (e) {
+    return null;
+  }
+};
+
+export const subscribeToAuthChanges = (callback: (event: string, session: any) => void) => {
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    callback(event, session);
+  });
+  return subscription;
+};
+
 // --- DATA FETCHING & CRUD ---
 
 export const fetchUserProfiles = async (): Promise<UserProfile[]> => {

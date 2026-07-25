@@ -58,6 +58,7 @@ interface ForgeStore {
   // Authentication & Session
   currentUser: UserProfile | null;
   isLoggedIn: boolean;
+  isAuthInitializing: boolean;
   registeredUsers: RegisteredUser[];
   showAuthModal: boolean;
   authModalMode: "login" | "register";
@@ -94,6 +95,7 @@ interface ForgeStore {
   activeStartupId: string | null;
   
   // Actions
+  initializeAuth: () => Promise<void>;
   setViewMode: (mode: "landing" | "app") => void;
   setShowOnboardingModal: (show: boolean) => void;
   completeOnboarding: (data: any) => Promise<void>;
@@ -146,6 +148,8 @@ export const useForgeStore = create<ForgeStore>()(
       authModalMode: "login",
       isLoading: false,
       errorMessage: null,
+      isAuthInitializing: true,
+      
       // View & Onboarding State
       viewMode: "landing",
       showOnboardingModal: false,
@@ -154,6 +158,78 @@ export const useForgeStore = create<ForgeStore>()(
       activeRole: "founder",
       activeContext: "personal",
       activeModule: "dashboard",
+
+      initializeAuth: async () => {
+        set({ isAuthInitializing: true });
+        try {
+          const { getCurrentSession, getCurrentUserProfile, subscribeToAuthChanges } = await import("../services/supabaseService");
+          const session = await getCurrentSession();
+          
+          if (session?.user) {
+            const profile = await getCurrentUserProfile(session.user.id);
+            const userRole: UserRole = profile?.role || (session.user.user_metadata?.role as UserRole) || "founder";
+            const isRoleComplete = Boolean(profile?.role || session.user.user_metadata?.role);
+
+            const targetModule: CoreModuleType = userRole === "mentor" ? "mentor-hub" : (userRole === "admin" ? "admin-os" : "dashboard");
+
+            set({
+              currentUser: profile || {
+                id: session.user.id,
+                userId: session.user.id,
+                username: session.user.email?.split("@")[0] || "user",
+                fullName: session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "Forge Member",
+                email: session.user.email || "",
+                role: userRole
+              },
+              isLoggedIn: true,
+              activeRole: userRole,
+              activeModule: targetModule,
+              viewMode: "app",
+              showAuthModal: false,
+              showOnboardingModal: !isRoleComplete,
+              isAuthInitializing: false
+            });
+          } else {
+            set({ isAuthInitializing: false });
+          }
+
+          // Subscribe to auth state changes for seamless session restoration
+          subscribeToAuthChanges(async (event, session) => {
+            if (event === "SIGNED_OUT") {
+              set({
+                currentUser: null,
+                isLoggedIn: false,
+                viewMode: "landing",
+                showAuthModal: false,
+                showOnboardingModal: false
+              });
+            } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+              if (session?.user) {
+                const profile = await getCurrentUserProfile(session.user.id);
+                const userRole: UserRole = profile?.role || (session.user.user_metadata?.role as UserRole) || "founder";
+                const targetModule: CoreModuleType = userRole === "mentor" ? "mentor-hub" : (userRole === "admin" ? "admin-os" : "dashboard");
+                set({
+                  currentUser: profile || {
+                    id: session.user.id,
+                    userId: session.user.id,
+                    username: session.user.email?.split("@")[0] || "user",
+                    fullName: session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "Forge Member",
+                    email: session.user.email || "",
+                    role: userRole
+                  },
+                  isLoggedIn: true,
+                  activeRole: userRole,
+                  activeModule: targetModule,
+                  viewMode: "app",
+                  showAuthModal: false
+                });
+              }
+            }
+          });
+        } catch (e) {
+          set({ isAuthInitializing: false });
+        }
+      },
       
       setViewMode: (mode) => set({ viewMode: mode }),
       setShowOnboardingModal: (show) => set({ showOnboardingModal: show }),
@@ -334,17 +410,22 @@ export const useForgeStore = create<ForgeStore>()(
             role: "founder" as UserRole
           };
           
+          const userRole = matched.role || "founder";
+          const targetModule: CoreModuleType = userRole === "mentor" ? "mentor-hub" : (userRole === "admin" ? "admin-os" : "dashboard");
+
           set({
             currentUser: matched,
             isLoggedIn: true,
-            activeRole: matched.role,
+            activeRole: userRole,
+            activeModule: targetModule,
             showAuthModal: false,
+            showOnboardingModal: !matched.role,
             viewMode: "app",
             isLoading: false
           });
           return { success: true, message: `Welcome back, ${matched.fullName}!` };
         } catch (e: any) {
-          // Dev Fallback if Supabase credentials are empty
+          // Dev Fallback if Supabase credentials are empty or local dev login
           const fallbackProfile: UserProfile = {
             id: `usr-dev-${Date.now()}`,
             userId: `usr-dev-${Date.now()}`,
@@ -356,7 +437,10 @@ export const useForgeStore = create<ForgeStore>()(
           set({
             currentUser: fallbackProfile,
             isLoggedIn: true,
+            activeRole: "founder",
+            activeModule: "dashboard",
             showAuthModal: false,
+            viewMode: "app",
             isLoading: false
           });
           return { success: true, message: `Logged in as ${fallbackProfile.fullName}` };
@@ -369,7 +453,13 @@ export const useForgeStore = create<ForgeStore>()(
         } catch (e) {
           // Ignore
         }
-        set({ currentUser: null, isLoggedIn: false });
+        set({ 
+          currentUser: null, 
+          isLoggedIn: false, 
+          viewMode: "landing", 
+          showAuthModal: false, 
+          showOnboardingModal: false 
+        });
       },
 
       setActiveRole: (role) => set({ activeRole: role }),

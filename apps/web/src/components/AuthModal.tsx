@@ -63,6 +63,7 @@ export default function AuthModal() {
           setFeedback({ type: "error", text: res.message });
         } else {
           setFeedback({ type: "success", text: res.message });
+          setShowAuthModal(false);
         }
       } else if (mode === "forgot") {
         if (!email) {
