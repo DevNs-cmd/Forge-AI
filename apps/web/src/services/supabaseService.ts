@@ -402,3 +402,109 @@ export const fetchStartupsFromDB = async (): Promise<Startup[]> => {
     createdAt: s.created_at
   }));
 };
+
+// --- REALTIME SUBSCRIPTIONS ---
+
+export const subscribeToRealtimeTable = (tableName: string, callback: (payload: any) => void) => {
+  const channel = supabase
+    .channel(`public:${tableName}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: tableName }, (payload) => {
+      callback(payload);
+    })
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+};
+
+// --- AI HISTORY PERSISTENCE ---
+
+export const saveAIConversation = async (
+  userId: string,
+  promptType: string,
+  promptContent: string,
+  responseContent: any,
+  providerUsed: string = 'groq'
+) => {
+  try {
+    const { data, error } = await supabase.from('ai_history').insert({
+      user_id: userId,
+      prompt_type: promptType,
+      prompt_content: promptContent,
+      response_content: responseContent,
+      provider_used: providerUsed
+    });
+    if (error) console.warn('Error saving AI history:', error);
+    return data;
+  } catch (e) {
+    console.warn('Error in saveAIConversation:', e);
+  }
+};
+
+export const fetchUserAIHistory = async (userId: string) => {
+  try {
+    const { data, error } = await supabase
+      .from('ai_history')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+    if (error) return [];
+    return data || [];
+  } catch (e) {
+    return [];
+  }
+};
+
+// --- REAL DATABASE SEARCH ---
+
+export const searchEntitiesInDB = async (searchQuery: string) => {
+  if (!searchQuery || searchQuery.trim().length === 0) {
+    return { ideas: [], startups: [], users: [] };
+  }
+  const q = `%${searchQuery.trim()}%`;
+  
+  const [ideasRes, startupsRes, usersRes] = await Promise.all([
+    supabase.from('ideas').select('*').or(`title.ilike.${q},problem_statement.ilike.${q},solution.ilike.${q}`),
+    supabase.from('startups').select('*').or(`name.ilike.${q},description.ilike.${q},industry.ilike.${q}`),
+    supabase.from('users').select('*').or(`full_name.ilike.${q},username.ilike.${q},email.ilike.${q}`)
+  ]);
+
+  return {
+    ideas: ideasRes.data || [],
+    startups: startupsRes.data || [],
+    users: usersRes.data || []
+  };
+};
+
+// --- REAL ANALYTICS CALCULATIONS ---
+
+export const fetchPlatformAnalytics = async () => {
+  try {
+    const [usersCount, startupsCount, ideasCount, votesCount, fundingRes] = await Promise.all([
+      supabase.from('users').select('id', { count: 'exact', head: true }),
+      supabase.from('startups').select('id', { count: 'exact', head: true }),
+      supabase.from('ideas').select('id', { count: 'exact', head: true }),
+      supabase.from('votes').select('id', { count: 'exact', head: true }),
+      supabase.from('funding').select('amount')
+    ]);
+
+    const totalFunding = (fundingRes.data || []).reduce((acc: number, f: any) => acc + Number(f.amount || 0), 0);
+
+    return {
+      totalUsers: usersCount.count || 0,
+      totalStartups: startupsCount.count || 0,
+      totalIdeas: ideasCount.count || 0,
+      totalVotes: votesCount.count || 0,
+      totalCapitalSyndicated: totalFunding
+    };
+  } catch (e) {
+    return {
+      totalUsers: 0,
+      totalStartups: 0,
+      totalIdeas: 0,
+      totalVotes: 0,
+      totalCapitalSyndicated: 0
+    };
+  }
+};

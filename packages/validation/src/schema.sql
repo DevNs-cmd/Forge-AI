@@ -237,6 +237,17 @@ CREATE TABLE IF NOT EXISTS public.transactions (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 19. AI HISTORY TABLE (Stores user AI conversations & LangGraph validation runs)
+CREATE TABLE IF NOT EXISTS public.ai_history (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    prompt_type TEXT NOT NULL,
+    prompt_content TEXT NOT NULL,
+    response_content JSONB NOT NULL,
+    provider_used TEXT DEFAULT 'groq',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- ============================================================================
 -- INDEXES FOR OPTIMAL QUERY PERFORMANCE
 -- ============================================================================
@@ -245,6 +256,7 @@ CREATE INDEX IF NOT EXISTS idx_startups_creator ON public.startups(created_by);
 CREATE INDEX IF NOT EXISTS idx_votes_user_idea ON public.votes(user_id, idea_id);
 CREATE INDEX IF NOT EXISTS idx_applications_applicant ON public.applications(applicant_id);
 CREATE INDEX IF NOT EXISTS idx_messages_sender_receiver ON public.messages(sender_id, receiver_id);
+CREATE INDEX IF NOT EXISTS idx_ai_history_user ON public.ai_history(user_id);
 
 -- ============================================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
@@ -255,6 +267,7 @@ ALTER TABLE public.startups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.votes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.applications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ai_history ENABLE ROW LEVEL SECURITY;
 
 -- Allow public read access to active ideas & startups
 CREATE POLICY "Public Read Ideas" ON public.ideas FOR SELECT USING (true);
@@ -272,3 +285,7 @@ CREATE POLICY "Auth Delete Vote" ON public.votes FOR DELETE USING (auth.uid() = 
 -- Messages: Users can see messages sent to or by them
 CREATE POLICY "Own Messages" ON public.messages FOR SELECT USING (auth.uid() = sender_id OR auth.uid() = receiver_id);
 CREATE POLICY "Send Messages" ON public.messages FOR INSERT WITH CHECK (auth.uid() = sender_id);
+
+-- AI History: Users can view & save their own AI conversations
+CREATE POLICY "Own AI History" ON public.ai_history FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Save AI History" ON public.ai_history FOR INSERT WITH CHECK (auth.uid() = user_id);

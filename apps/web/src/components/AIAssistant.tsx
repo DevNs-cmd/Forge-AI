@@ -83,6 +83,10 @@ export default function AIAssistant() {
           readinessScore: data.readinessScore
         });
 
+        // Save AI History in Supabase
+        const { saveAiHistory } = useForgeStore.getState();
+        saveAiHistory("idea_validation", query, data, data.providerUsed || "groq");
+
         if (data.suggestedExperiments && data.suggestedExperiments.length > 0) {
           data.suggestedExperiments.forEach((exp: any, index: number) => {
             addExperiment({

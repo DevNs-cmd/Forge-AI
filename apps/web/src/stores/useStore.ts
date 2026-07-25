@@ -89,6 +89,8 @@ interface ForgeStore {
   startups: Startup[];
   documents: WorkspaceDocument[];
   tasks: WorkspaceTask[];
+  aiHistory: any[];
+  platformAnalytics: any;
   
   // Handles
   activeIdeaId: string | null;
@@ -99,6 +101,7 @@ interface ForgeStore {
   setViewMode: (mode: "landing" | "app") => void;
   setShowOnboardingModal: (show: boolean) => void;
   completeOnboarding: (data: any) => Promise<void>;
+  saveAiHistory: (promptType: string, promptContent: string, responseContent: any, providerUsed?: string) => Promise<void>;
   
   setShowAuthModal: (show: boolean, mode?: "login" | "register") => void;
   registerUser: (newUser: { username: string; email: string; fullName: string; pass: string; role: UserRole }) => Promise<{ success: boolean; message: string }>;
@@ -154,6 +157,10 @@ export const useForgeStore = create<ForgeStore>()(
       viewMode: "landing",
       showOnboardingModal: false,
       isOnboarded: false,
+
+      // Datasets & Analytics
+      aiHistory: [],
+      platformAnalytics: null,
 
       activeRole: "founder",
       activeContext: "personal",
@@ -562,20 +569,65 @@ export const useForgeStore = create<ForgeStore>()(
         tasks: state.tasks.map((t) => t.id === taskId ? { ...t, ...updates } : t)
       })),
 
+      saveAiHistory: async (promptType, promptContent, responseContent, providerUsed = "groq") => {
+        const userId = get().currentUser?.userId;
+        if (!userId) return;
+        try {
+          const { saveAIConversation, fetchUserAIHistory } = await import("../services/supabaseService");
+          await saveAIConversation(userId, promptType, promptContent, responseContent, providerUsed);
+          const history = await fetchUserAIHistory(userId);
+          set({ aiHistory: history });
+        } catch (e) {
+          console.warn("Failed to save AI history:", e);
+        }
+      },
+
       loadDatabaseState: async () => {
         const state = get();
         set({ isLoading: true });
         try {
-          const [dbIdeas, dbBuilders, dbInvestors] = await Promise.all([
+          const { 
+            fetchIdeasFromDB, 
+            fetchStartupsFromDB, 
+            fetchBuilderProfiles, 
+            fetchInvestorProfiles, 
+            fetchUserAIHistory,
+            fetchPlatformAnalytics,
+            subscribeToRealtimeTable 
+          } = await import("../services/supabaseService");
+
+          const [dbIdeas, dbStartups, dbBuilders, dbInvestors, analytics] = await Promise.all([
             fetchIdeasFromDB(state.currentUser?.userId),
+            fetchStartupsFromDB(),
             fetchBuilderProfiles(),
-            fetchInvestorProfiles()
+            fetchInvestorProfiles(),
+            fetchPlatformAnalytics()
           ]);
+
+          let userHistory: any[] = [];
+          if (state.currentUser?.userId) {
+            userHistory = await fetchUserAIHistory(state.currentUser.userId);
+          }
+
           set({
-            ideas: dbIdeas.length > 0 ? dbIdeas : state.ideas,
-            builderProfiles: dbBuilders.length > 0 ? dbBuilders : state.builderProfiles,
-            investorProfiles: dbInvestors.length > 0 ? dbInvestors : state.investorProfiles,
+            ideas: dbIdeas,
+            startups: dbStartups,
+            builderProfiles: dbBuilders,
+            investorProfiles: dbInvestors,
+            aiHistory: userHistory,
+            platformAnalytics: analytics,
             isLoading: false
+          });
+
+          // Subscribe to Supabase Realtime table changes
+          subscribeToRealtimeTable('ideas', () => {
+            fetchIdeasFromDB(state.currentUser?.userId).then(ideas => set({ ideas }));
+          });
+          subscribeToRealtimeTable('startups', () => {
+            fetchStartupsFromDB().then(startups => set({ startups }));
+          });
+          subscribeToRealtimeTable('votes', () => {
+            fetchIdeasFromDB(state.currentUser?.userId).then(ideas => set({ ideas }));
           });
         } catch (e) {
           set({ isLoading: false });
