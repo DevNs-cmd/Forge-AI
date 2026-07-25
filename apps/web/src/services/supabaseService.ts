@@ -61,12 +61,55 @@ export const signUpUser = async (email: string, password: string, fullName: stri
     if (error) throw error;
     
     if (data.user) {
+      const userId = data.user.id;
+
+      // 1. Insert/Upsert in public.users
       await supabase.from('users').upsert({
-        id: data.user.id,
+        id: userId,
         email,
         username,
         full_name: fullName,
         role
+      });
+
+      // 2. Insert in public.profiles
+      await supabase.from('profiles').upsert({
+        user_id: userId,
+        location: 'San Francisco, CA'
+      });
+
+      // 3. Insert in Role-Specific Profile Table
+      if (role === 'founder') {
+        await supabase.from('founder_profiles').upsert({
+          user_id: userId,
+          primary_industry: 'B2B SaaS',
+          commitment: 'Full-time'
+        });
+      } else if (role === 'builder') {
+        await supabase.from('builder_profiles').upsert({
+          user_id: userId,
+          title: 'Full Stack Engineer',
+          primary_skills: ['TypeScript', 'React', 'Node.js']
+        });
+      } else if (role === 'investor') {
+        await supabase.from('investor_profiles').upsert({
+          user_id: userId,
+          investor_type: 'Angel',
+          check_size_range: '$25k - $100k'
+        });
+      } else if (role === 'mentor') {
+        await supabase.from('mentor_profiles').upsert({
+          user_id: userId,
+          years_experience: 5
+        });
+      }
+
+      // 4. Activity Log
+      await supabase.from('activities').insert({
+        user_id: userId,
+        action: 'user_registered',
+        entity_type: 'user',
+        metadata: { role }
       });
     }
     return data;
@@ -86,6 +129,54 @@ export const signInUser = async (email: string, password: string) => {
   } catch (err: any) {
     throw new Error(formatAuthError(err));
   }
+};
+
+export const signInWithGoogle = async () => {
+  try {
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: typeof window !== 'undefined' ? `${window.location.origin}` : undefined
+      }
+    });
+    if (error) throw error;
+    return data;
+  } catch (err: any) {
+    throw new Error(formatAuthError(err));
+  }
+};
+
+export const ensureUserProfileExists = async (user: any): Promise<UserProfile> => {
+  let profile = await getCurrentUserProfile(user.id);
+  if (!profile) {
+    const email = user.email || '';
+    const username = user.user_metadata?.username || email.split('@')[0] || `user_${Date.now()}`;
+    const fullName = user.user_metadata?.full_name || user.user_metadata?.name || username;
+    
+    await supabase.from('users').upsert({
+      id: user.id,
+      email,
+      username,
+      full_name: fullName,
+      onboarding_complete: false
+    });
+    
+    await supabase.from('profiles').upsert({
+      user_id: user.id,
+      location: 'San Francisco, CA'
+    });
+
+    profile = {
+      id: user.id,
+      userId: user.id,
+      username,
+      fullName,
+      email,
+      onboardingComplete: false,
+      profileCompleted: false
+    };
+  }
+  return profile;
 };
 
 export const sendPasswordResetEmail = async (email: string) => {
@@ -120,13 +211,19 @@ export const signOutUser = async () => {
 export const saveOnboardingProfile = async (userId: string, data: any) => {
   const role = data.role as UserRole;
   
-  // 1. Update public.users role
-  await supabase.from('users').update({ role }).eq('id', userId);
+  // 1. Update public.users: role, onboarding_complete = true, profile_completed = true, updated_at
+  await supabase.from('users').update({ 
+    role,
+    onboarding_complete: true,
+    profile_completed: true,
+    updated_at: new Date().toISOString()
+  }).eq('id', userId);
   
-  // 2. Update public.profiles location
+  // 2. Update public.profiles
   await supabase.from('profiles').upsert({
     user_id: userId,
-    location: data.location || 'San Francisco, CA'
+    location: data.location || 'San Francisco, CA',
+    github_url: data.portfolioLink || null
   });
 
   // 3. Update role-specific table
@@ -141,32 +238,41 @@ export const saveOnboardingProfile = async (userId: string, data: any) => {
         created_by: userId,
         name: data.startupName,
         industry: data.industry || 'B2B SaaS',
-        description: data.goals || 'New venture on Forge OS',
-        stage: data.stage || 'formation'
+        description: `New ${data.industry || 'B2B SaaS'} startup on Forge OS.`,
+        stage: data.stage || 'formation',
+        team_size: data.teamSize || 1
       });
     }
   } else if (role === 'builder') {
     await supabase.from('builder_profiles').upsert({
       user_id: userId,
-      title: data.experienceLevel ? `Software Engineer (${data.experienceLevel})` : 'Full Stack Developer',
-      primary_skills: data.primarySkills ? data.primarySkills.split(',').map((s: string) => s.trim()) : ['React', 'Node.js'],
-      equity_preference: data.equityPref || 'Equity + Cash'
+      title: data.experienceLevel ? `Builder (${data.experienceLevel})` : 'Software Builder',
+      primary_skills: data.primarySkills ? data.primarySkills.split(',').map((s: string) => s.trim()) : ['TypeScript', 'React'],
+      equity_preference: 'Equity + Cash',
+      availability_status: data.availability || 'Available',
+      portfolio_links: data.portfolioLink ? [data.portfolioLink] : []
     });
   } else if (role === 'investor') {
     await supabase.from('investor_profiles').upsert({
       user_id: userId,
+      investor_type: data.investorType || 'Angel',
       check_size_range: data.checkSize || '$25k - $100k',
-      preferred_stages: data.preferredStages ? data.preferredStages.split(',').map((s: string) => s.trim()) : ['Seed'],
-      investment_theses: data.preferredIndustries ? data.preferredIndustries.split(',').map((s: string) => s.trim()) : ['AI / ML']
-    });
-  } else if (role === 'mentor') {
-    await supabase.from('mentor_profiles').upsert({
-      user_id: userId,
-      expertise_areas: data.domain ? [data.domain] : ['Startup Strategy'],
-      years_experience: data.yearsExp || 5,
-      pro_bono_available: true
+      preferred_stages: data.preferredStages ? data.preferredStages.split(',').map((s: string) => s.trim()) : ['Pre-Seed', 'Seed'],
+      investment_theses: data.preferredIndustries ? data.preferredIndustries.split(',').map((s: string) => s.trim()) : ['AI', 'SaaS']
     });
   }
+};
+
+export const updateUserRole = async (userId: string, newRole: UserRole) => {
+  const { data, error } = await supabase
+    .from('users')
+    .update({ 
+      role: newRole,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', userId);
+  if (error) throw error;
+  return data;
 };
 
 export const getCurrentSession = async () => {
@@ -189,7 +295,10 @@ export const getCurrentUserProfile = async (userId: string): Promise<UserProfile
       username: data.username || data.email?.split('@')[0] || 'user',
       fullName: data.full_name || 'Forge Member',
       email: data.email,
-      role: data.role || 'founder',
+      role: data.role || undefined,
+      // Read each flag independently from the DB — do NOT coerce or fallback to the other flag
+      onboardingComplete: Boolean(data.onboarding_complete),
+      profileCompleted: Boolean(data.profile_completed),
       avatarUrl: data.avatar_url,
       createdAt: data.created_at
     };
@@ -220,6 +329,9 @@ export const fetchUserProfiles = async (): Promise<UserProfile[]> => {
     fullName: u.full_name,
     email: u.email,
     role: u.role,
+    // Read each flag independently from the DB — do NOT coerce or fallback to the other flag
+    onboardingComplete: Boolean(u.onboarding_complete),
+    profileCompleted: Boolean(u.profile_completed),
     avatarUrl: u.avatar_url,
     createdAt: u.created_at
   }));

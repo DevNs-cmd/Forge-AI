@@ -44,7 +44,8 @@ export type CoreModuleType =
   | "syndicates"
   | "acquisition-marketplace"
   | "mentor-hub"
-  | "admin-os";
+  | "admin-os"
+  | "settings";
 
 interface RegisteredUser {
   username: string;
@@ -104,11 +105,12 @@ interface ForgeStore {
   saveAiHistory: (promptType: string, promptContent: string, responseContent: any, providerUsed?: string) => Promise<void>;
   
   setShowAuthModal: (show: boolean, mode?: "login" | "register") => void;
-  registerUser: (newUser: { username: string; email: string; fullName: string; pass: string; role: UserRole }) => Promise<{ success: boolean; message: string }>;
+  registerUser: (newUser: { username: string; email: string; fullName: string; pass: string; role?: UserRole }) => Promise<{ success: boolean; message: string }>;
   loginUser: (emailOrUser: string, pass: string) => Promise<{ success: boolean; message: string }>;
   logoutUser: () => Promise<void>;
   
   setActiveRole: (role: UserRole) => void;
+  changeUserRole: (newRole: UserRole) => Promise<void>;
   setActiveContext: (context: "personal" | "company") => void;
   setActiveModule: (module: CoreModuleType) => void;
   
@@ -135,17 +137,9 @@ interface ForgeStore {
 export const useForgeStore = create<ForgeStore>()(
   persist(
     (set, get) => ({
-      // Default Session State
-      currentUser: {
-        id: "user-default-1",
-        userId: "user-default-1",
-        username: "alex_founder",
-        fullName: "Alex Rivera",
-        email: "alex@forge.os",
-        role: "founder",
-        headline: "Serial Tech Founder"
-      },
-      isLoggedIn: true,
+      // Default Session State (Unauthenticated by default)
+      currentUser: null,
+      isLoggedIn: false,
       registeredUsers: [],
       showAuthModal: false,
       authModalMode: "login",
@@ -173,21 +167,14 @@ export const useForgeStore = create<ForgeStore>()(
           const session = await getCurrentSession();
           
           if (session?.user) {
-            const profile = await getCurrentUserProfile(session.user.id);
-            const userRole: UserRole = profile?.role || (session.user.user_metadata?.role as UserRole) || "founder";
-            const isRoleComplete = Boolean(profile?.role || session.user.user_metadata?.role);
-
+            const { ensureUserProfileExists } = await import("../services/supabaseService");
+            const profile = await ensureUserProfileExists(session.user);
+            const userRole: UserRole = profile.role || "founder";
+            const isRoleComplete = Boolean(profile.onboardingComplete && profile.role);
             const targetModule: CoreModuleType = userRole === "mentor" ? "mentor-hub" : (userRole === "admin" ? "admin-os" : "dashboard");
 
             set({
-              currentUser: profile || {
-                id: session.user.id,
-                userId: session.user.id,
-                username: session.user.email?.split("@")[0] || "user",
-                fullName: session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "Forge Member",
-                email: session.user.email || "",
-                role: userRole
-              },
+              currentUser: profile,
               isLoggedIn: true,
               activeRole: userRole,
               activeModule: targetModule,
@@ -197,7 +184,7 @@ export const useForgeStore = create<ForgeStore>()(
               isAuthInitializing: false
             });
           } else {
-            set({ isAuthInitializing: false });
+            set({ currentUser: null, isLoggedIn: false, isAuthInitializing: false });
           }
 
           // Subscribe to auth state changes for seamless session restoration
@@ -212,23 +199,20 @@ export const useForgeStore = create<ForgeStore>()(
               });
             } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
               if (session?.user) {
-                const profile = await getCurrentUserProfile(session.user.id);
-                const userRole: UserRole = profile?.role || (session.user.user_metadata?.role as UserRole) || "founder";
+                const { ensureUserProfileExists } = await import("../services/supabaseService");
+                const profile = await ensureUserProfileExists(session.user);
+                const userRole: UserRole = profile.role || "founder";
+                const isRoleComplete = Boolean(profile.onboardingComplete && profile.role);
                 const targetModule: CoreModuleType = userRole === "mentor" ? "mentor-hub" : (userRole === "admin" ? "admin-os" : "dashboard");
                 set({
-                  currentUser: profile || {
-                    id: session.user.id,
-                    userId: session.user.id,
-                    username: session.user.email?.split("@")[0] || "user",
-                    fullName: session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "Forge Member",
-                    email: session.user.email || "",
-                    role: userRole
-                  },
+                  currentUser: profile,
                   isLoggedIn: true,
                   activeRole: userRole,
                   activeModule: targetModule,
                   viewMode: "app",
-                  showAuthModal: false
+                  showAuthModal: false,
+                  showOnboardingModal: !isRoleComplete,
+                  isAuthInitializing: false
                 });
               }
             }
@@ -245,157 +229,72 @@ export const useForgeStore = create<ForgeStore>()(
         const state = get();
         set({ isLoading: true });
         try {
+          const role = (data.role || state.currentUser?.role || "founder") as UserRole;
           if (state.currentUser?.userId) {
             const { saveOnboardingProfile } = await import("../services/supabaseService");
-            await saveOnboardingProfile(state.currentUser.userId, data);
+            await saveOnboardingProfile(state.currentUser.userId, { ...data, role });
           }
+          const targetModule: CoreModuleType = role === "admin" ? "admin-os" : (role === "mentor" ? "mentor-hub" : "dashboard");
+          // Mirror the DB write back into local state so onboardingComplete/profileCompleted are
+          // immediately true — future logins will read these values from Supabase directly.
           set((s) => ({
-            activeRole: data.role as UserRole,
+            activeRole: role,
+            activeModule: targetModule,
             isOnboarded: true,
             showOnboardingModal: false,
             viewMode: "app",
             isLoading: false,
-            currentUser: s.currentUser ? { ...s.currentUser, role: data.role as UserRole } : null
+            currentUser: s.currentUser
+              ? { ...s.currentUser, role, onboardingComplete: true, profileCompleted: true }
+              : null
           }));
         } catch (e) {
           set({ isLoading: false });
         }
       },
-      
-      ideas: [
-        {
-          id: "idea-101",
-          ownerId: "user-default-1",
-          ownerName: "Alex Rivera",
-          title: "AI Co-pilot for Startup Operations",
-          oneLiner: "Autonomous workspace agents that manage compliance and data rooms.",
-          problemStatement: "Founders spend 15+ hours weekly on manual updates and diligence.",
-          solution: "State-driven multi-agent platform connecting GitHub, Slack, and Supabase.",
-          targetMarket: "Early stage B2B tech founders",
-          status: "validated",
-          readinessScore: 88,
-          upvotes: 24,
-          competitors: ["Linear", "Notion"],
-          tags: ["AI", "SaaS"],
-          userVoted: false
-        },
-        {
-          id: "idea-102",
-          ownerId: "usr-202",
-          ownerName: "Elena Rostova",
-          title: "Micro-Logistics Direct Dispatcher",
-          oneLiner: "Direct distribution network connecting local organic farms to restaurants.",
-          problemStatement: "Food producers lose 30% margin on middle-man delivery platforms.",
-          solution: "Self-dispatch routing web app for local farm-to-table supply chains.",
-          targetMarket: "Independent organic producers",
-          status: "refining",
-          readinessScore: 65,
-          upvotes: 18,
-          competitors: ["DoorDash", "UberEats"],
-          tags: ["Logistics", "Marketplace"],
-          userVoted: false
-        }
-      ],
-      founderCandidates: [
-        {
-          id: "fc-1",
-          name: "Sarah Chen",
-          avatarUrl: "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=250&q=80",
-          roleTitle: "Technical Co-founder (Ex-Stripe)",
-          skills: ["React", "Node.js", "Python", "System Architecture"],
-          commitment: "Full-time",
-          workingStyle: "Asynchronous & Fast Iteration",
-          riskTolerance: "High",
-          matchScore: 94,
-          bio: "Full-stack engineer with 7 years scaling SaaS platforms.",
-          location: "San Francisco, CA"
-        }
-      ],
+
+      ideas: [],
+      founderCandidates: [],
       builderProfiles: [],
       investorProfiles: [],
       mentorProfiles: [],
       experiments: [],
       evidence: [],
-      serviceProviders: [
-        {
-          id: "sp-1",
-          name: "Clerky & Stripe Atlas",
-          category: "Legal & Incorporation",
-          offerDetails: "Fast Delaware C-Corp setup with integrated bank account.",
-          perksValue: "$500 Off Legal Fees",
-          verifiedBadge: true,
-          logoUrl: "https://images.unsplash.com/photo-1589829545856-d10d557cf95f?auto=format&fit=crop&w=150&q=80"
-        }
-      ],
-      syndicates: [
-        {
-          id: "syn-1",
-          name: "AI Frontiers Syndicate",
-          leadName: "Marcus Vance",
-          targetAllocation: "$250,000",
-          committedAmount: "$180,000",
-          membersCount: 42,
-          focusSector: "Applied Generative AI",
-          status: "Open"
-        }
-      ],
-      acquisitions: [
-        {
-          id: "acq-1",
-          title: "Micro-SaaS SEO Analytics Tool",
-          category: "Developer Tooling",
-          arr: "$48,000 ARR",
-          askingPrice: "$120,000",
-          profitMargin: "85%",
-          techStack: ["Next.js", "Tailwind", "Supabase"],
-          status: "Listed"
-        }
-      ],
-      startups: [
-        {
-          id: "startup-101",
-          name: "Forge Operations",
-          industry: "B2B SaaS / Developer Tools",
-          description: "Operating system for early-stage startup validation and team assembly.",
-          stage: "formation",
-          mrr: 2500,
-          valuation: 1500000,
-          teamSize: 3,
-          createdBy: "user-default-1"
-        }
-      ],
+      serviceProviders: [],
+      syndicates: [],
+      acquisitions: [],
+      startups: [],
       documents: [],
       tasks: [],
       
-      activeIdeaId: "idea-101",
-      activeStartupId: "startup-101",
+      activeIdeaId: null,
+      activeStartupId: null,
       
       // Actions
       setShowAuthModal: (show, mode = "login") => set({ showAuthModal: show, authModalMode: mode }),
       
-      registerUser: async ({ username, email, fullName, pass, role }) => {
+      registerUser: async ({ username, email, fullName, pass, role = "founder" }) => {
         set({ isLoading: true, errorMessage: null });
         try {
-          await signUpUser(email, pass, fullName, username, role);
+          await signUpUser(email, pass, fullName, username, "founder");
           const newUserProfile: UserProfile = {
             id: `usr-${Date.now()}`,
             userId: `usr-${Date.now()}`,
             username,
             fullName,
             email,
-            role,
-            headline: `Forge ${role} member`
+            onboardingComplete: false,
+            profileCompleted: false
           };
           set({
             currentUser: newUserProfile,
             isLoggedIn: true,
-            activeRole: role,
             showAuthModal: false,
             showOnboardingModal: true,
             viewMode: "app",
             isLoading: false
           });
-          return { success: true, message: `Welcome to Forge OS as a ${role.toUpperCase()}!` };
+          return { success: true, message: `Account created successfully! Please complete your profile.` };
         } catch (e: any) {
           set({ isLoading: false, errorMessage: e.message });
           return { success: false, message: e.message || "Registration failed" };
@@ -407,18 +306,20 @@ export const useForgeStore = create<ForgeStore>()(
         try {
           const email = emailOrUser.includes("@") ? emailOrUser : `${emailOrUser}@forge.os`;
           await signInUser(email, pass);
+          // Load profile directly from DB — never inject default values
           const users = await fetchUserProfiles();
-          const matched = users.find(u => u.email === email) || {
-            id: `usr-${Date.now()}`,
-            userId: `usr-${Date.now()}`,
-            username: emailOrUser,
-            fullName: emailOrUser,
-            email,
-            role: "founder" as UserRole
-          };
-          
+          const matched = users.find(u => u.email === email || u.username === emailOrUser);
+
+          if (!matched) {
+            // Profile not in DB yet (extremely rare edge case during sign-up race).
+            // Let initializeAuth / subscribeToAuthChanges handle the state once the session settles.
+            set({ isLoading: false });
+            return { success: true, message: "Logging you in..." };
+          }
+
           const userRole = matched.role || "founder";
-          const targetModule: CoreModuleType = userRole === "mentor" ? "mentor-hub" : (userRole === "admin" ? "admin-os" : "dashboard");
+          const needsOnboarding = !matched.onboardingComplete;
+          const targetModule: CoreModuleType = userRole === "admin" ? "admin-os" : (userRole === "mentor" ? "mentor-hub" : "dashboard");
 
           set({
             currentUser: matched,
@@ -426,31 +327,14 @@ export const useForgeStore = create<ForgeStore>()(
             activeRole: userRole,
             activeModule: targetModule,
             showAuthModal: false,
-            showOnboardingModal: !matched.role,
+            showOnboardingModal: needsOnboarding,
             viewMode: "app",
             isLoading: false
           });
           return { success: true, message: `Welcome back, ${matched.fullName}!` };
         } catch (e: any) {
-          // Dev Fallback if Supabase credentials are empty or local dev login
-          const fallbackProfile: UserProfile = {
-            id: `usr-dev-${Date.now()}`,
-            userId: `usr-dev-${Date.now()}`,
-            username: emailOrUser,
-            fullName: emailOrUser.split("@")[0],
-            email: emailOrUser.includes("@") ? emailOrUser : `${emailOrUser}@forge.os`,
-            role: "founder"
-          };
-          set({
-            currentUser: fallbackProfile,
-            isLoggedIn: true,
-            activeRole: "founder",
-            activeModule: "dashboard",
-            showAuthModal: false,
-            viewMode: "app",
-            isLoading: false
-          });
-          return { success: true, message: `Logged in as ${fallbackProfile.fullName}` };
+          set({ isLoading: false, errorMessage: e.message });
+          return { success: false, message: e.message || "Authentication failed. Incorrect email or password." };
         }
       },
 
@@ -470,6 +354,25 @@ export const useForgeStore = create<ForgeStore>()(
       },
 
       setActiveRole: (role) => set({ activeRole: role }),
+      changeUserRole: async (newRole: UserRole) => {
+        const state = get();
+        const userId = state.currentUser?.userId;
+        if (!userId) return;
+
+        const targetModule: CoreModuleType = newRole === "mentor" ? "mentor-hub" : (newRole === "admin" ? "admin-os" : "dashboard");
+        set((s) => ({
+          activeRole: newRole,
+          activeModule: targetModule,
+          currentUser: s.currentUser ? { ...s.currentUser, role: newRole } : null
+        }));
+
+        try {
+          const { updateUserRole } = await import("../services/supabaseService");
+          await updateUserRole(userId, newRole);
+        } catch (e) {
+          console.warn("Failed to persist role change in Supabase", e);
+        }
+      },
       setActiveContext: (context) => set({ activeContext: context }),
       setActiveModule: (module) => set({ activeModule: module }),
 
@@ -641,25 +544,8 @@ export const useForgeStore = create<ForgeStore>()(
   )
 );
 
-// Subscribe to Supabase Auth Changes & Load DB
-if (typeof window !== "undefined") {
-  supabase.auth.onAuthStateChange(async (event, session) => {
-    if (session?.user) {
-      const user = session.user;
-      const role = (user.user_metadata?.role as UserRole) || "founder";
-      useForgeStore.setState({
-        currentUser: {
-          id: user.id,
-          userId: user.id,
-          username: user.user_metadata?.username || user.email?.split("@")[0],
-          fullName: user.user_metadata?.full_name || "Forge User",
-          email: user.email,
-          role,
-          headline: `Forge ${role} member`
-        },
-        isLoggedIn: true,
-        activeRole: role
-      });
-    }
-  });
-}
+// NOTE: Auth state changes are managed exclusively inside initializeAuth via
+// subscribeToAuthChanges. A second raw onAuthStateChange listener here was
+// removed because it raced with initializeAuth and always overwrote the store
+// with hardcoded `onboardingComplete: false` defaults, causing the onboarding
+// modal to appear on every login regardless of the Supabase DB value.
