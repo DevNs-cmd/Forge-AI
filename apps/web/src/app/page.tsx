@@ -24,6 +24,7 @@ import ValidationOSModule from "@/components/ValidationOSModule";
 import AcquisitionMarketplaceModule from "@/components/AcquisitionMarketplaceModule";
 import MentorModule from "@/components/MentorModule";
 import AdminModule from "@/components/AdminModule";
+import SettingsModule from "@/components/SettingsModule";
 
 export default function Home() {
   const { 
@@ -69,6 +70,8 @@ export default function Home() {
         return <MentorModule />;
       case "admin-os":
         return <AdminModule />;
+      case "settings":
+        return <SettingsModule />;
       default:
         return <DashboardModule />;
     }

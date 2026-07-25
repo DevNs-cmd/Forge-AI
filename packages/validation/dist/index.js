@@ -26,7 +26,9 @@ exports.userProfileSchema = zod_1.z.object({
     avatarUrl: zod_1.z.string().optional().or(zod_1.z.literal("")),
     headline: zod_1.z.string().max(160).optional(),
     bio: zod_1.z.string().max(1000).optional(),
-    role: exports.userRoleSchema.default("founder"),
+    role: exports.userRoleSchema.optional(),
+    onboardingComplete: zod_1.z.boolean().default(false),
+    profileCompleted: zod_1.z.boolean().default(false),
     createdAt: zod_1.z.string().optional(),
     updatedAt: zod_1.z.string().optional()
 });

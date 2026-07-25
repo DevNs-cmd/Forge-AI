@@ -5,8 +5,21 @@ import { Shield, Users, Building2, Activity, AlertTriangle, CheckCircle, Search,
 import { useForgeStore } from "@/stores/useStore";
 
 export default function AdminModule() {
-  const { registeredUsers, startups, ideas } = useForgeStore();
+  const { registeredUsers, startups, ideas, currentUser } = useForgeStore();
   const [searchTerm, setSearchTerm] = useState("");
+
+  if (currentUser?.role !== "admin") {
+    return (
+      <div className="p-8 bg-rose-50 border border-rose-200 rounded-2xl text-center space-y-3 my-8">
+        <Shield className="text-rose-600 mx-auto" size={36} />
+        <h2 className="text-lg font-bold text-rose-900">Access Restricted: Root Admin Authorization Required</h2>
+        <p className="text-xs text-rose-700 max-w-lg mx-auto">
+          Your account is currently registered with the <strong>{currentUser?.role?.toUpperCase() || 'FOUNDER'}</strong> role. 
+          Admin Operations and Platform Moderation are strictly restricted to system administrators.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

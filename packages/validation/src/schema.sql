@@ -13,7 +13,9 @@ CREATE TABLE IF NOT EXISTS public.users (
     email TEXT UNIQUE NOT NULL,
     username TEXT UNIQUE NOT NULL,
     full_name TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('founder', 'builder', 'investor', 'mentor', 'admin')) DEFAULT 'founder',
+    role TEXT CHECK (role IN ('founder', 'builder', 'investor', 'mentor', 'admin')),
+    onboarding_complete BOOLEAN DEFAULT FALSE,
+    profile_completed BOOLEAN DEFAULT FALSE,
     avatar_url TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()

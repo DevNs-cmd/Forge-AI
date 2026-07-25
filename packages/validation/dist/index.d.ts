@@ -41,15 +41,19 @@ export declare const userProfileSchema: z.ZodObject<{
     avatarUrl: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
     headline: z.ZodOptional<z.ZodString>;
     bio: z.ZodOptional<z.ZodString>;
-    role: z.ZodDefault<z.ZodEnum<["founder", "builder", "investor", "mentor", "admin"]>>;
+    role: z.ZodOptional<z.ZodEnum<["founder", "builder", "investor", "mentor", "admin"]>>;
+    onboardingComplete: z.ZodDefault<z.ZodBoolean>;
+    profileCompleted: z.ZodDefault<z.ZodBoolean>;
     createdAt: z.ZodOptional<z.ZodString>;
     updatedAt: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
     fullName: string;
-    role: "founder" | "builder" | "investor" | "mentor" | "admin";
     userId: string;
+    onboardingComplete: boolean;
+    profileCompleted: boolean;
     username?: string | undefined;
     email?: string | undefined;
+    role?: "founder" | "builder" | "investor" | "mentor" | "admin" | undefined;
     id?: string | undefined;
     avatarUrl?: string | undefined;
     headline?: string | undefined;
@@ -66,6 +70,8 @@ export declare const userProfileSchema: z.ZodObject<{
     avatarUrl?: string | undefined;
     headline?: string | undefined;
     bio?: string | undefined;
+    onboardingComplete?: boolean | undefined;
+    profileCompleted?: boolean | undefined;
     createdAt?: string | undefined;
     updatedAt?: string | undefined;
 }>;

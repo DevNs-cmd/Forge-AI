@@ -32,7 +32,9 @@ export const userProfileSchema = z.object({
   avatarUrl: z.string().optional().or(z.literal("")),
   headline: z.string().max(160).optional(),
   bio: z.string().max(1000).optional(),
-  role: userRoleSchema.default("founder"),
+  role: userRoleSchema.optional(),
+  onboardingComplete: z.boolean().default(false),
+  profileCompleted: z.boolean().default(false),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional()
 });

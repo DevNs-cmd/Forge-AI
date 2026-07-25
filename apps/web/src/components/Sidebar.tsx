@@ -20,7 +20,8 @@ import {
   LogOut,
   LogIn,
   Shield,
-  Award
+  Award,
+  Settings
 } from "lucide-react";
 
 export default function Sidebar() {
@@ -53,11 +54,15 @@ export default function Sidebar() {
     { id: "syndicates", label: "9. Syndicates", icon: DollarSign, roles: ["founder", "investor", "admin"] },
     { id: "acquisition-marketplace", label: "10. Acquisitions", icon: ShoppingBag, roles: ["founder", "investor", "admin"] },
     { id: "mentor-hub", label: "Mentor Hub", icon: Award, roles: ["mentor", "admin"], badge: "Advisory" },
-    { id: "admin-os", label: "Admin Operations", icon: Shield, roles: ["admin"], badge: "Root" }
+    { id: "admin-os", label: "Admin Operations", icon: Shield, roles: ["admin"], badge: "Root" },
+    { id: "settings", label: "Settings", icon: Settings, roles: ["founder", "builder", "investor", "mentor", "admin"] }
   ];
 
-  // Filter items based on active role
-  const navItems = allNavItems.filter(item => item.roles.includes(activeRole));
+  // Enforce effective role based strictly on authenticated Supabase user profile
+  const effectiveRole: UserRole = currentUser?.role || activeRole || "founder";
+
+  // Filter items based on user's authentic role
+  const navItems = allNavItems.filter(item => item.roles.includes(effectiveRole));
 
   return (
     <div className="w-64 bg-white border-r border-neutral-100 flex flex-col h-screen sticky top-0 shrink-0 select-none">
@@ -78,45 +83,38 @@ export default function Sidebar() {
 
       {/* User Session Bar */}
       <div className="p-3 border-b border-neutral-100 bg-neutral-50/50">
-        {isLoggedIn && currentUser ? (
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 truncate">
-              <div className="h-7 w-7 rounded-full bg-brand-600 text-white flex items-center justify-center font-bold text-xs shrink-0 uppercase">
-                {currentUser.username?.[0] || "U"}
-              </div>
-              <div className="truncate">
-                <span className="text-xs font-bold text-neutral-800 block truncate">
-                  {currentUser.fullName}
-                </span>
-                <span className="text-[10px] text-neutral-400 block truncate uppercase">
-                  Role: {currentUser.role}
-                </span>
-              </div>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5 overflow-hidden">
+            <div className="h-8 w-8 rounded-full bg-brand-500/10 text-brand-700 flex items-center justify-center font-bold text-xs shrink-0">
+              {currentUser?.fullName ? currentUser.fullName.charAt(0).toUpperCase() : "U"}
             </div>
+            <div className="overflow-hidden">
+              <p className="text-xs font-bold text-neutral-900 truncate">
+                {currentUser?.fullName || "Authenticated User"}
+              </p>
+              <p className="text-[9px] text-neutral-500 font-semibold uppercase tracking-wider">
+                ROLE: <span className="text-brand-600 font-bold">{effectiveRole}</span>
+              </p>
+            </div>
+          </div>
+          {isLoggedIn ? (
             <button
               onClick={() => logoutUser()}
+              className="p-1.5 text-neutral-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
               title="Log Out"
-              className="text-neutral-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-neutral-100 transition"
             >
               <LogOut size={14} />
             </button>
-          </div>
-        ) : (
-          <div className="flex gap-2">
+          ) : (
             <button
               onClick={() => setShowAuthModal(true, "login")}
-              className="flex-1 bg-brand-600 hover:bg-brand-700 text-white font-bold text-xs py-1.5 px-2 rounded-lg flex items-center justify-center gap-1 shadow-sm transition"
+              className="p-1.5 text-brand-600 hover:bg-brand-50 rounded-lg transition"
+              title="Log In"
             >
-              <LogIn size={12} /> Log In
+              <LogIn size={14} />
             </button>
-            <button
-              onClick={() => setShowAuthModal(true, "register")}
-              className="flex-1 bg-neutral-200 hover:bg-neutral-300 text-neutral-700 font-bold text-xs py-1.5 px-2 rounded-lg transition"
-            >
-              Register
-            </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Context Switcher (Personal vs Startup) */}
@@ -124,7 +122,7 @@ export default function Sidebar() {
         <div className="flex bg-neutral-100 p-1 rounded-lg">
           <button
             onClick={() => setActiveContext("personal")}
-            className={`flex-1 flex items-center justify-center gap-1 py-1.5 text-[11px] font-semibold rounded-md transition-all ${
+            className={`flex-1 flex items-center justify-center gap-1 py-1 text-[11px] font-semibold rounded-md transition-all ${
               activeContext === "personal"
                 ? "bg-white text-brand-700 shadow-sm"
                 : "text-neutral-500 hover:text-neutral-800"
@@ -140,42 +138,38 @@ export default function Sidebar() {
                 alert("Please spin up a company blueprint in '3. Startup Blueprint' first!");
               }
             }}
-            className={`flex-1 flex items-center justify-center gap-1 py-1.5 text-[11px] font-semibold rounded-md transition-all ${
+            className={`flex-1 flex items-center justify-center gap-1 py-1 text-[11px] font-semibold rounded-md transition-all ${
               activeContext === "company"
                 ? "bg-white text-brand-700 shadow-sm"
                 : "text-neutral-500 hover:text-neutral-800"
-            } ${startups.length === 0 ? "opacity-50" : ""}`}
+            }`}
           >
             <Building2 size={12} /> Startup
           </button>
         </div>
       </div>
 
-      {/* Navigation Modules (Role Tailored) */}
-      <div className="flex-1 px-2.5 py-3 space-y-1 overflow-y-auto">
-        <label className="text-[9px] font-bold text-neutral-400 uppercase tracking-widest block px-2.5 mb-1.5">
-          {activeRole.toUpperCase()} Navigation
-        </label>
+      {/* Active Navigation Menu */}
+      <div className="flex-1 overflow-y-auto p-3 space-y-1">
+        <div className="text-[9px] font-bold text-neutral-400 uppercase tracking-widest px-2 mb-1">
+          Workspace Navigation
+        </div>
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeModule === item.id;
+
           return (
             <button
               key={item.id}
               onClick={() => setActiveModule(item.id)}
-              className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-semibold transition-all group ${
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold transition ${
                 isActive
-                  ? "bg-brand-50 text-brand-800"
-                  : "text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900"
+                  ? "bg-brand-600 text-white shadow-sm"
+                  : "text-neutral-600 hover:text-neutral-900 hover:bg-neutral-100/70"
               }`}
             >
               <div className="flex items-center gap-2.5 truncate">
-                <Icon 
-                  size={16} 
-                  className={`transition-colors shrink-0 ${
-                    isActive ? "text-brand-600" : "text-neutral-400 group-hover:text-neutral-600"
-                  }`}
-                />
+                <Icon size={16} className={isActive ? "text-white" : "text-neutral-400"} />
                 <span className="truncate">{item.label}</span>
               </div>
               {item.badge && (
@@ -188,30 +182,13 @@ export default function Sidebar() {
         })}
       </div>
 
-      {/* Role Switcher Footer */}
+      {/* Authenticated Role Status Footer */}
       <div className="p-3 border-t border-neutral-100 bg-neutral-50/50">
-        <label className="text-[9px] font-bold text-neutral-400 uppercase tracking-widest block mb-1">
-          Active Persona Role
-        </label>
-        <div className="grid grid-cols-5 gap-0.5 bg-neutral-200/60 p-0.5 rounded-md text-[8px] font-bold uppercase">
-          {(["founder", "builder", "investor", "mentor", "admin"] as const).map((role) => (
-            <button
-              key={role}
-              onClick={() => {
-                setActiveRole(role);
-                if (role === "admin") setActiveModule("admin-os");
-                else if (role === "mentor") setActiveModule("mentor-hub");
-                else setActiveModule("dashboard");
-              }}
-              className={`py-1 rounded transition text-center truncate ${
-                activeRole === role
-                  ? "bg-brand-600 text-white shadow-sm"
-                  : "text-neutral-600 hover:text-neutral-900"
-              }`}
-            >
-              {role.slice(0, 3)}
-            </button>
-          ))}
+        <div className="flex items-center justify-between text-[10px] text-neutral-500 font-semibold">
+          <span>Active Role:</span>
+          <span className="bg-brand-100 text-brand-700 font-bold px-2 py-0.5 rounded uppercase text-[9px]">
+            {effectiveRole}
+          </span>
         </div>
       </div>
     </div>
