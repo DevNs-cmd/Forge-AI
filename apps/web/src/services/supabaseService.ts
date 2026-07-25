@@ -18,42 +18,98 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-// --- AUTHENTICATION SERVICES ---
+// --- AUTHENTICATION SERVICES & ERROR HANDLING ---
+
+export const formatAuthError = (error: any): string => {
+  if (!error) return "An unexpected error occurred. Please try again.";
+  const msg = typeof error === 'string' ? error : (error.message || String(error));
+  
+  if (msg.includes("email rate limit exceeded") || msg.includes("rate_limit")) {
+    return "We've recently sent a verification email. Please wait a few minutes before requesting another one.";
+  }
+  if (msg.includes("Invalid login credentials") || msg.includes("invalid_credentials")) {
+    return "Incorrect email or password. Please check your credentials and try again.";
+  }
+  if (msg.includes("User already registered") || msg.includes("already_exists")) {
+    return "An account with this email address already exists. Please log in instead.";
+  }
+  if (msg.includes("Email not confirmed") || msg.includes("unconfirmed")) {
+    return "Please check your inbox and verify your email address before logging in.";
+  }
+  if (msg.includes("Password should be at least")) {
+    return "Your password must be at least 6 characters long.";
+  }
+  if (msg.includes("Unable to validate email address")) {
+    return "Please enter a valid email address.";
+  }
+  return msg;
+};
 
 export const signUpUser = async (email: string, password: string, fullName: string, username: string, role: UserRole) => {
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      data: {
-        full_name: fullName,
-        username,
-        role
-      }
-    }
-  });
-  if (error) throw error;
-  
-  if (data.user) {
-    // Insert into public users table
-    await supabase.from('users').upsert({
-      id: data.user.id,
+  try {
+    const { data, error } = await supabase.auth.signUp({
       email,
-      username,
-      full_name: fullName,
-      role
+      password,
+      options: {
+        data: {
+          full_name: fullName,
+          username,
+          role
+        }
+      }
     });
+    if (error) throw error;
+    
+    if (data.user) {
+      await supabase.from('users').upsert({
+        id: data.user.id,
+        email,
+        username,
+        full_name: fullName,
+        role
+      });
+    }
+    return data;
+  } catch (err: any) {
+    throw new Error(formatAuthError(err));
   }
-  return data;
 };
 
 export const signInUser = async (email: string, password: string) => {
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
-    password
-  });
-  if (error) throw error;
-  return data;
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+    if (error) throw error;
+    return data;
+  } catch (err: any) {
+    throw new Error(formatAuthError(err));
+  }
+};
+
+export const sendPasswordResetEmail = async (email: string) => {
+  try {
+    const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`
+    });
+    if (error) throw error;
+    return data;
+  } catch (err: any) {
+    throw new Error(formatAuthError(err));
+  }
+};
+
+export const updatePassword = async (newPassword: string) => {
+  try {
+    const { data, error } = await supabase.auth.updateUser({
+      password: newPassword
+    });
+    if (error) throw error;
+    return data;
+  } catch (err: any) {
+    throw new Error(formatAuthError(err));
+  }
 };
 
 export const signOutUser = async () => {
