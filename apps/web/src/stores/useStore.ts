@@ -64,6 +64,11 @@ interface ForgeStore {
   isLoading: boolean;
   errorMessage: string | null;
   
+  // Landing Page vs App View
+  viewMode: "landing" | "app";
+  showOnboardingModal: boolean;
+  isOnboarded: boolean;
+  
   // Navigation & Space Context
   activeRole: UserRole;
   activeContext: "personal" | "company";
@@ -89,6 +94,10 @@ interface ForgeStore {
   activeStartupId: string | null;
   
   // Actions
+  setViewMode: (mode: "landing" | "app") => void;
+  setShowOnboardingModal: (show: boolean) => void;
+  completeOnboarding: (data: any) => Promise<void>;
+  
   setShowAuthModal: (show: boolean, mode?: "login" | "register") => void;
   registerUser: (newUser: { username: string; email: string; fullName: string; pass: string; role: UserRole }) => Promise<{ success: boolean; message: string }>;
   loginUser: (emailOrUser: string, pass: string) => Promise<{ success: boolean; message: string }>;
@@ -137,10 +146,38 @@ export const useForgeStore = create<ForgeStore>()(
       authModalMode: "login",
       isLoading: false,
       errorMessage: null,
-      
+      // View & Onboarding State
+      viewMode: "landing",
+      showOnboardingModal: false,
+      isOnboarded: false,
+
       activeRole: "founder",
       activeContext: "personal",
       activeModule: "dashboard",
+      
+      setViewMode: (mode) => set({ viewMode: mode }),
+      setShowOnboardingModal: (show) => set({ showOnboardingModal: show }),
+      
+      completeOnboarding: async (data) => {
+        const state = get();
+        set({ isLoading: true });
+        try {
+          if (state.currentUser?.userId) {
+            const { saveOnboardingProfile } = await import("../services/supabaseService");
+            await saveOnboardingProfile(state.currentUser.userId, data);
+          }
+          set((s) => ({
+            activeRole: data.role as UserRole,
+            isOnboarded: true,
+            showOnboardingModal: false,
+            viewMode: "app",
+            isLoading: false,
+            currentUser: s.currentUser ? { ...s.currentUser, role: data.role as UserRole } : null
+          }));
+        } catch (e) {
+          set({ isLoading: false });
+        }
+      },
       
       ideas: [
         {
@@ -271,6 +308,8 @@ export const useForgeStore = create<ForgeStore>()(
             isLoggedIn: true,
             activeRole: role,
             showAuthModal: false,
+            showOnboardingModal: true,
+            viewMode: "app",
             isLoading: false
           });
           return { success: true, message: `Welcome to Forge OS as a ${role.toUpperCase()}!` };
@@ -300,6 +339,7 @@ export const useForgeStore = create<ForgeStore>()(
             isLoggedIn: true,
             activeRole: matched.role,
             showAuthModal: false,
+            viewMode: "app",
             isLoading: false
           });
           return { success: true, message: `Welcome back, ${matched.fullName}!` };

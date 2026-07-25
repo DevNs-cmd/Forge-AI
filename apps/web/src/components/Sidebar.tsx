@@ -35,7 +35,8 @@ export default function Sidebar() {
     currentUser,
     isLoggedIn,
     setShowAuthModal,
-    logoutUser
+    logoutUser,
+    setViewMode
   } = useForgeStore();
 
   // All available navigation items
@@ -62,7 +63,7 @@ export default function Sidebar() {
     <div className="w-64 bg-white border-r border-neutral-100 flex flex-col h-screen sticky top-0 shrink-0 select-none">
       {/* Brand Header */}
       <div className="h-16 flex items-center px-5 border-b border-neutral-100 justify-between">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 cursor-pointer" onClick={() => setViewMode("landing")} title="Return to Landing Page">
           <div className="h-8 w-8 rounded-lg bg-brand-600 flex items-center justify-center text-white font-bold text-lg shadow-sm">
             F
           </div>

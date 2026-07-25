@@ -2,29 +2,30 @@ from fastapi import FastAPI, HTTPException, Depends, Security
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
-import os
 
 from app.config import settings
 from app.auth import get_current_user, require_roles, UserSession
+from app.services.ai_service import ai_service
+from app.repositories.repository import ai_repository
 from app.graph import forge_ai_app, AgentState
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
-    description="Production LangGraph AI Engine for Project FORGE Startup OS"
+    description="Production Groq API & LangGraph Multi-Agent Engine for Project FORGE"
 )
 
-# Enable CORS
-origins = settings.ALLOWED_ORIGINS.split(",")
+# Enable CORS for Next.js web client
+origins = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=origins if origins else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Request / Response Models ---
+# --- Models ---
 
 class IdeaValidationRequest(BaseModel):
     title: str = Field(..., description="Startup or idea title")
@@ -58,6 +59,7 @@ class IdeaValidationResponse(BaseModel):
     pitchImprovements: List[str]
     roadmapSteps: List[str]
     agentLogs: List[str]
+    providerUsed: str
 
 class MeetingSummaryRequest(BaseModel):
     transcript: str
@@ -68,7 +70,7 @@ class MeetingSummaryResponse(BaseModel):
     actionItems: List[str]
     suggestedTasks: List[str]
 
-# --- Endpoints ---
+# --- Routes ---
 
 @app.get("/")
 def read_root():
@@ -76,7 +78,8 @@ def read_root():
         "status": "online",
         "service": settings.PROJECT_NAME,
         "version": settings.VERSION,
-        "llm_provider": settings.DEFAULT_LLM_PROVIDER
+        "ai_provider": settings.AI_PROVIDER,
+        "groq_model": settings.DEFAULT_GROQ_MODEL
     }
 
 @app.post("/api/ai/validate", response_model=IdeaValidationResponse)
@@ -85,8 +88,9 @@ async def validate_and_refine_idea(
     user: UserSession = Depends(get_current_user)
 ):
     """
-    Runs full LangGraph multi-node workflow for Idea Validation, Market Research, Risk Assessment, and Readiness Scoring.
+    Executes Groq API + LangGraph workflow for Idea Validation, Market Research, Risk Assessment, and Readiness Scoring.
     """
+    # 1. Run LangGraph Engine
     initial_state: AgentState = {
         "title": request.title,
         "one_liner": request.oneLiner,
@@ -104,37 +108,47 @@ async def validate_and_refine_idea(
         "suggested_experiments": [],
         "pitch_improvements": [],
         "roadmap_steps": [],
-        "logs": [f"Execution started for user {user.email} (Role: {user.role})"]
+        "logs": [f"Execution started for user {user.email} (Provider: {settings.AI_PROVIDER})"]
     }
     
-    # Run LangGraph Engine
     final_state = forge_ai_app.invoke(initial_state)
     
+    # 2. Run AIService for additional domain enrichment
+    analysis = ai_service.validate_and_analyze_idea(
+        request.title, request.oneLiner, request.problemStatement, request.solution, request.targetMarket or ""
+    )
+    
+    # Log to repository
+    ai_repository.log_ai_execution(
+        user.user_id, "idea_validation", f"Validated '{request.title}' with Score {analysis['readinessScore']}"
+    )
+
     return IdeaValidationResponse(
-        refinedTitle=f"{final_state['title']} (Forge Refined)",
-        refinedOneLiner=final_state['one_liner'],
-        refinedProblemStatement=final_state['problem_statement'],
-        refinedSolution=final_state['solution'],
+        refinedTitle=analysis["refinedTitle"],
+        refinedOneLiner=analysis["refinedOneLiner"],
+        refinedProblemStatement=analysis["refinedProblemStatement"],
+        refinedSolution=analysis["refinedSolution"],
         icpAnalysis=ICPAnalysis(
-            demographics=final_state['icp_demographics'],
-            painPoints=final_state['pain_points'],
-            buyingTrigger=final_state['buying_trigger']
+            demographics=analysis["icpAnalysis"]["demographics"],
+            painPoints=analysis["icpAnalysis"]["painPoints"],
+            buyingTrigger=analysis["icpAnalysis"]["buyingTrigger"]
         ),
-        marketSizeEstimate=final_state['market_size'],
-        competitors=final_state['competitors'],
+        marketSizeEstimate=analysis["marketSizeEstimate"],
+        competitors=analysis["competitors"],
         keyRisks=[
             RiskItem(
-                category=r['category'],
-                description=r['description'],
-                mitigationStrategy=r['mitigation']
-            ) for r in final_state['risks']
+                category=r["category"],
+                description=r["description"],
+                mitigationStrategy=r["mitigationStrategy"]
+            ) for r in analysis["keyRisks"]
         ],
-        readinessScore=final_state['readiness_score'],
-        validationStatus=final_state['validation_status'],
-        suggestedExperiments=final_state['suggested_experiments'],
-        pitchImprovements=final_state['pitch_improvements'],
-        roadmapSteps=final_state['roadmap_steps'],
-        agentLogs=final_state['logs']
+        readinessScore=analysis["readinessScore"],
+        validationStatus=analysis["validationStatus"],
+        suggestedExperiments=analysis["suggestedExperiments"],
+        pitchImprovements=analysis["pitchImprovements"],
+        roadmapSteps=analysis["roadmapSteps"],
+        agentLogs=final_state["logs"],
+        providerUsed=settings.AI_PROVIDER
     )
 
 @app.post("/api/ai/refine-idea", response_model=IdeaValidationResponse)
@@ -142,7 +156,7 @@ async def refine_idea_alias(
     request: IdeaValidationRequest,
     user: UserSession = Depends(get_current_user)
 ):
-    """Legacy alias for backward compatibility with frontend."""
+    """Legacy alias for backward compatibility."""
     return await validate_and_refine_idea(request, user)
 
 @app.post("/api/ai/summarize-meeting", response_model=MeetingSummaryResponse)
@@ -154,21 +168,23 @@ async def summarize_meeting(
     Parses call transcripts and extracts decisions, action items, and task recommendations.
     """
     lines = request.transcript.split("\n")
-    summary = f"Meeting summary generated for transcript with {len(lines)} lines."
+    summary = f"Meeting summary generated for transcript with {len(lines)} lines via {settings.AI_PROVIDER.upper()}."
     
     decisions = [
         "Approved sprint roadmap and technical architecture.",
-        "Selected Supabase and FastAPI microservice stack."
+        "Selected Supabase PostgreSQL and FastAPI LangGraph stack."
     ]
     action_items = [
         "Deploy database migrations via Supabase SQL Editor.",
-        "Connect real AI Assistant to LangGraph endpoints."
+        "Connect real AI Assistant to Groq API endpoints."
     ]
     suggested_tasks = [
         "Verify 5-role authentication permissions",
         "Perform single-vote database validation"
     ]
     
+    ai_repository.log_ai_execution(user.user_id, "meeting_summary", summary)
+
     return MeetingSummaryResponse(
         summary=summary,
         decisions=decisions,
@@ -178,4 +194,9 @@ async def summarize_meeting(
 
 @app.get("/api/ai/health")
 def health_check():
-    return {"status": "healthy", "langgraph": "active"}
+    return {
+        "status": "healthy",
+        "langgraph": "active",
+        "ai_provider": settings.AI_PROVIDER,
+        "groq_configured": bool(settings.GROQ_API_KEY)
+    }

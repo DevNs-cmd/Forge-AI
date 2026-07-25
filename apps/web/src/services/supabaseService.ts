@@ -61,6 +61,58 @@ export const signOutUser = async () => {
   if (error) throw error;
 };
 
+export const saveOnboardingProfile = async (userId: string, data: any) => {
+  const role = data.role as UserRole;
+  
+  // 1. Update public.users role
+  await supabase.from('users').update({ role }).eq('id', userId);
+  
+  // 2. Update public.profiles location
+  await supabase.from('profiles').upsert({
+    user_id: userId,
+    location: data.location || 'San Francisco, CA'
+  });
+
+  // 3. Update role-specific table
+  if (role === 'founder') {
+    await supabase.from('founder_profiles').upsert({
+      user_id: userId,
+      primary_industry: data.industry || 'B2B SaaS',
+      commitment: 'Full-time'
+    });
+    if (data.startupName) {
+      await supabase.from('startups').insert({
+        created_by: userId,
+        name: data.startupName,
+        industry: data.industry || 'B2B SaaS',
+        description: data.goals || 'New venture on Forge OS',
+        stage: data.stage || 'formation'
+      });
+    }
+  } else if (role === 'builder') {
+    await supabase.from('builder_profiles').upsert({
+      user_id: userId,
+      title: data.experienceLevel ? `Software Engineer (${data.experienceLevel})` : 'Full Stack Developer',
+      primary_skills: data.primarySkills ? data.primarySkills.split(',').map((s: string) => s.trim()) : ['React', 'Node.js'],
+      equity_preference: data.equityPref || 'Equity + Cash'
+    });
+  } else if (role === 'investor') {
+    await supabase.from('investor_profiles').upsert({
+      user_id: userId,
+      check_size_range: data.checkSize || '$25k - $100k',
+      preferred_stages: data.preferredStages ? data.preferredStages.split(',').map((s: string) => s.trim()) : ['Seed'],
+      investment_theses: data.preferredIndustries ? data.preferredIndustries.split(',').map((s: string) => s.trim()) : ['AI / ML']
+    });
+  } else if (role === 'mentor') {
+    await supabase.from('mentor_profiles').upsert({
+      user_id: userId,
+      expertise_areas: data.domain ? [data.domain] : ['Startup Strategy'],
+      years_experience: data.yearsExp || 5,
+      pro_bono_available: true
+    });
+  }
+};
+
 export const getCurrentSession = async () => {
   const { data, error } = await supabase.auth.getSession();
   if (error) throw error;

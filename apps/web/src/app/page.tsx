@@ -2,9 +2,11 @@
 
 import React from "react";
 import { useForgeStore } from "@/stores/useStore";
+import LandingPage from "@/components/LandingPage";
+import OnboardingFlow from "@/components/OnboardingFlow";
+import AuthModal from "@/components/AuthModal";
 import Sidebar from "@/components/Sidebar";
 import AIAssistant from "@/components/AIAssistant";
-import AuthModal from "@/components/AuthModal";
 
 // Import all Module views
 import DashboardModule from "@/components/DashboardModule";
@@ -23,7 +25,7 @@ import MentorModule from "@/components/MentorModule";
 import AdminModule from "@/components/AdminModule";
 
 export default function Home() {
-  const { activeModule } = useForgeStore();
+  const { activeModule, viewMode } = useForgeStore();
 
   const renderModule = () => {
     switch (activeModule) {
@@ -60,10 +62,23 @@ export default function Home() {
     }
   };
 
+  // Render SaaS Landing Page view
+  if (viewMode === "landing") {
+    return (
+      <>
+        <AuthModal />
+        <OnboardingFlow />
+        <LandingPage />
+      </>
+    );
+  }
+
+  // Render Full App Workspace view
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-neutral-50/50">
-      {/* Auth Modal Overlay */}
+      {/* Auth & Onboarding Overlays */}
       <AuthModal />
+      <OnboardingFlow />
 
       {/* Persistent Left Sidebar */}
       <Sidebar />

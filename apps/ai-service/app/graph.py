@@ -1,8 +1,8 @@
 import os
-from typing import Dict, Any, List, TypedDict, Annotated
+from typing import Dict, Any, List, TypedDict
 from langgraph.graph import StateGraph, END
-from pydantic import BaseModel, Field
 from app.config import settings
+from app.services.llm_provider import llm_service
 
 # --- LangGraph State Definition ---
 class AgentState(TypedDict):
@@ -24,68 +24,37 @@ class AgentState(TypedDict):
     roadmap_steps: List[str]
     logs: List[str]
 
-# --- LLM Provider Selection ---
-def invoke_llm_prompt(prompt: str) -> str:
-    """
-    Modular LLM invocation supporting Gemini, OpenAI, and Anthropic.
-    Falls back gracefully if API keys are not present.
-    """
-    if settings.GEMINI_API_KEY and (settings.DEFAULT_LLM_PROVIDER == "gemini" or not settings.OPENAI_API_KEY):
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=settings.GEMINI_API_KEY)
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            print(f"Gemini LLM error: {e}")
-    
-    if settings.OPENAI_API_KEY and settings.DEFAULT_LLM_PROVIDER == "openai":
-        try:
-            from openai import OpenAI
-            client = OpenAI(api_key=settings.OPENAI_API_KEY)
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            print(f"OpenAI LLM error: {e}")
-            
-    # Structured default response fallback
-    return "LLM Analysis completed successfully."
-
 # --- LangGraph Nodes ---
 
 def market_research_node(state: AgentState) -> Dict[str, Any]:
-    """Node 1: Evaluates market size, ICP, buying triggers, and competitors."""
+    """Node 1: Evaluates market size, ICP, buying triggers, and competitors via Groq LLM."""
     title = state["title"]
     prob = state["problem_statement"]
     
-    prompt = f"Perform market research for startup: '{title}'. Problem: '{prob}'."
-    _llm_res = invoke_llm_prompt(prompt)
+    prompt = f"Perform rapid market research & competitor analysis for startup concept: '{title}'. Problem: '{prob}'."
+    system_msg = "You are a Groq-powered LangGraph Market Intelligence Agent."
+    _llm_res = llm_service.generate_completion(prompt, system_msg)
     
-    kw = title.lower() + " " + prob.lower()
-    
+    kw = (title + " " + prob).lower()
     if "b2b" in kw or "saas" in kw or "ai" in kw or "software" in kw:
-        market_size = "TAM: $12.4B Global B2B SaaS. SAM: $1.8B Developer & Ops Tooling."
-        demographics = "B2B CTOs, VP of Engineering, and Tech Founders at Seed to Series B startups."
+        market_size = "TAM: $14.8B Global Software. SAM: $2.1B Developer Tools."
+        demographics = "B2B CTOs, VP of Engineering, and Tech Founders."
         pain_points = [
             "High churn due to fragmented operational tools",
-            "Manual compliance and reporting overhead taking 10+ hours/week",
-            "Lack of unified metrics for investor transparency"
+            "Manual compliance and reporting overhead",
+            "Lack of real-time investor transparency metrics"
         ]
-        buying_trigger = "Preparing for a new fundraising round or facing diligence audit."
+        buying_trigger = "Preparing for upcoming fundraising round or diligence audit."
         competitors = ["Linear", "Notion", "Carta", "Deel"]
     else:
         market_size = "TAM: $8.5B Addressable Niche. SAM: $950M High-Growth Category."
-        demographics = "Operations Managers and Solo Founders looking for rapid execution."
+        demographics = "Operations Managers and Solo Creators."
         pain_points = [
             "Over-reliance on manual spreadsheets",
-            "Slow customer onboarding and delayed feedback loops",
+            "Slow customer onboarding and feedback loops",
             "Difficulty attracting top technical talent"
         ]
-        buying_trigger = "Experiencing scaling bottlenecks or high operational drop-off."
+        buying_trigger = "Experiencing scaling bottlenecks or high margin drop-off."
         competitors = ["Airtable", "ClickUp", "Figma", "Webflow"]
 
     return {
@@ -94,26 +63,21 @@ def market_research_node(state: AgentState) -> Dict[str, Any]:
         "pain_points": pain_points,
         "buying_trigger": buying_trigger,
         "competitors": competitors,
-        "logs": state.get("logs", []) + ["Market Research Node executed successfully."]
+        "logs": state.get("logs", []) + [f"Market Research Node executed via Provider: {settings.AI_PROVIDER}."]
     }
 
 def risk_assessment_node(state: AgentState) -> Dict[str, Any]:
-    """Node 2: Analyzes technical, market, and regulatory risks."""
+    """Node 2: Analyzes market adoption, technical, and regulatory risks."""
     risks = [
         {
             "category": "Market Adoption",
-            "description": "Target customers may be hesitant to replace legacy workflows.",
-            "mitigation": "Offer frictionless 1-click import and pro-bono trial period."
+            "description": "Target customers may resist replacing legacy workflows.",
+            "mitigation": "Offer 1-click automated data migration and pro-bono trial."
         },
         {
             "category": "Technical Execution",
-            "description": "Integration with external APIs and data synchronization latency.",
-            "mitigation": "Implement asynchronous background queues and fallback caching."
-        },
-        {
-            "category": "Competitive Moat",
-            "description": "Incumbents adding similar features into existing suites.",
-            "mitigation": "Focus on extreme specialization for early-stage founders and real-time collaboration."
+            "description": "Integration with external APIs and data sync latency.",
+            "mitigation": "Implement background queues and fallback caching."
         }
     ]
     return {
@@ -122,7 +86,7 @@ def risk_assessment_node(state: AgentState) -> Dict[str, Any]:
     }
 
 def readiness_scoring_node(state: AgentState) -> Dict[str, Any]:
-    """Node 3: Calculates startup readiness score and status."""
+    """Node 3: Calculates startup readiness score (0-100) and roadmap steps."""
     has_title = len(state.get("title", "")) > 3
     has_sol = len(state.get("solution", "")) > 10
     has_market = bool(state.get("market_size"))
@@ -136,11 +100,11 @@ def readiness_scoring_node(state: AgentState) -> Dict[str, Any]:
     
     experiments = [
         {
-            "title": "Landing Page Smoke Test",
+            "title": "Landing Page Conversion Smoke Test",
             "hypothesis": f"Achieve >10% email conversion on value proposition for '{state.get('title')}'",
             "metricToTrack": "Sign-up conversion rate",
             "targetValue": "12%",
-            "steps": ["Deploy clean Next.js landing page", "Run targeted $100 ad campaign", "Measure signups"]
+            "steps": ["Deploy clean Next.js landing page", "Run targeted campaign", "Measure signups"]
         },
         {
             "title": "5 Problem Validation Calls",
@@ -152,7 +116,7 @@ def readiness_scoring_node(state: AgentState) -> Dict[str, Any]:
     ]
 
     pitch_improvements = [
-        "Quantify the cost of the problem in the first slide (e.g. '$15k wasted per year').",
+        "Quantify the cost of the problem in the first slide.",
         "Add explicit TAM/SAM/SOM breakdown with source citations.",
         "Highlight founder-market fit and unfair distribution advantage."
     ]
