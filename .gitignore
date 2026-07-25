@@ -1,0 +1,26 @@
+# Dependency directories
+node_modules/
+jspm_packages/
+web_packages/
+
+# Next.js build output
+.next/
+out/
+
+# Python env and cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv
+venv/
+env/
+.pytest_cache/
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# TypeScript compilation
+*.tsbuildinfo

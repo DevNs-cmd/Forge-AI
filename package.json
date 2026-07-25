@@ -1,0 +1,21 @@
+{
+  "name": "project-forge-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev -w apps/web",
+    "dev:ai": "cd apps/ai-service && python -m uvicorn app.main:app --reload --port 8000",
+    "dev": "concurrently \"npm run dev:web\" \"npm run dev:ai\"",
+    "build": "npm run build --workspaces"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.8"
+  }
+}
