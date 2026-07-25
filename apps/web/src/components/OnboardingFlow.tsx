@@ -61,7 +61,7 @@ const stepVariants = {
 };
 
 export default function OnboardingFlow() {
-  const { showOnboardingModal, setShowOnboardingModal, completeOnboarding, currentUser, isLoading } =
+  const { showOnboardingModal, setShowOnboardingModal, completeOnboarding, currentUser, isLoading, errorMessage } =
     useForgeStore();
 
   const [step, setStep] = useState<1 | 2>(1);
@@ -381,6 +381,12 @@ export default function OnboardingFlow() {
                       }
                     </motion.button>
                   </div>
+
+                  {errorMessage && (
+                    <div className="mt-2 p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 font-medium">
+                      {errorMessage}
+                    </div>
+                  )}
                 </form>
               </motion.div>
             )}

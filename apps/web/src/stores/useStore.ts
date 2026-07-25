@@ -227,16 +227,20 @@ export const useForgeStore = create<ForgeStore>()(
       
       completeOnboarding: async (data) => {
         const state = get();
-        set({ isLoading: true });
+        set({ isLoading: true, errorMessage: null });
         try {
           const role = (data.role || state.currentUser?.role || "founder") as UserRole;
-          if (state.currentUser?.userId) {
-            const { saveOnboardingProfile } = await import("../services/supabaseService");
-            await saveOnboardingProfile(state.currentUser.userId, { ...data, role });
+          if (!state.currentUser?.userId) {
+            throw new Error("No authenticated user found. Please log in again.");
           }
+          const { saveOnboardingProfile } = await import("../services/supabaseService");
+          // This throws if the DB update fails (e.g. RLS blocks it), so we never
+          // silently proceed with onboardingComplete:true if the DB disagrees.
+          await saveOnboardingProfile(state.currentUser.userId, { ...data, role });
+
           const targetModule: CoreModuleType = role === "admin" ? "admin-os" : (role === "mentor" ? "mentor-hub" : "dashboard");
-          // Mirror the DB write back into local state so onboardingComplete/profileCompleted are
-          // immediately true — future logins will read these values from Supabase directly.
+          // Mirror the successful DB write into local state.
+          // Future logins read from Supabase; this just avoids a round-trip.
           set((s) => ({
             activeRole: role,
             activeModule: targetModule,
@@ -244,12 +248,16 @@ export const useForgeStore = create<ForgeStore>()(
             showOnboardingModal: false,
             viewMode: "app",
             isLoading: false,
+            errorMessage: null,
             currentUser: s.currentUser
               ? { ...s.currentUser, role, onboardingComplete: true, profileCompleted: true }
               : null
           }));
-        } catch (e) {
-          set({ isLoading: false });
+        } catch (e: any) {
+          // Surface the error so the user knows something went wrong.
+          // The modal stays open so they can retry.
+          console.error("[completeOnboarding] error:", e);
+          set({ isLoading: false, errorMessage: e.message || "Failed to save your profile. Please try again." });
         }
       },
 

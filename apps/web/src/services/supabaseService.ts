@@ -147,36 +147,49 @@ export const signInWithGoogle = async () => {
 };
 
 export const ensureUserProfileExists = async (user: any): Promise<UserProfile> => {
+  // First attempt: read the existing profile from the DB
   let profile = await getCurrentUserProfile(user.id);
-  if (!profile) {
-    const email = user.email || '';
-    const username = user.user_metadata?.username || email.split('@')[0] || `user_${Date.now()}`;
-    const fullName = user.user_metadata?.full_name || user.user_metadata?.name || username;
-    
-    await supabase.from('users').upsert({
+  if (profile) return profile;
+
+  // Profile not found. Create a new row — but use ignoreDuplicates:true so we
+  // NEVER overwrite an existing row's onboarding_complete, role, or any other
+  // saved field. This protects users who completed onboarding from being reset.
+  const email = user.email || '';
+  const username = user.user_metadata?.username || email.split('@')[0] || `user_${Date.now()}`;
+  const fullName = user.user_metadata?.full_name || user.user_metadata?.name || username;
+
+  await supabase.from('users').upsert(
+    {
       id: user.id,
       email,
       username,
       full_name: fullName,
-      onboarding_complete: false
-    });
-    
-    await supabase.from('profiles').upsert({
-      user_id: user.id,
-      location: 'San Francisco, CA'
-    });
+      onboarding_complete: false   // only applied on first INSERT, never on UPDATE
+    },
+    { onConflict: 'id', ignoreDuplicates: true }  // if row exists, do nothing
+  );
 
-    profile = {
-      id: user.id,
-      userId: user.id,
-      username,
-      fullName,
-      email,
-      onboardingComplete: false,
-      profileCompleted: false
-    };
-  }
-  return profile;
+  await supabase.from('profiles').upsert(
+    { user_id: user.id, location: 'San Francisco, CA' },
+    { onConflict: 'user_id', ignoreDuplicates: true }
+  );
+
+  // Re-fetch after the upsert. If the upsert was a no-op (row already existed
+  // but getCurrentUserProfile missed it on the first try), this will return the
+  // real DB values — including onboarding_complete:true for returning users.
+  const refetched = await getCurrentUserProfile(user.id);
+  if (refetched) return refetched;
+
+  // Absolute fallback: brand-new user whose row was just inserted
+  return {
+    id: user.id,
+    userId: user.id,
+    username,
+    fullName,
+    email,
+    onboardingComplete: false,
+    profileCompleted: false
+  };
 };
 
 export const sendPasswordResetEmail = async (email: string) => {
@@ -212,12 +225,19 @@ export const saveOnboardingProfile = async (userId: string, data: any) => {
   const role = data.role as UserRole;
   
   // 1. Update public.users: role, onboarding_complete = true, profile_completed = true, updated_at
-  await supabase.from('users').update({ 
+  const { error: updateError } = await supabase.from('users').update({ 
     role,
     onboarding_complete: true,
     profile_completed: true,
     updated_at: new Date().toISOString()
   }).eq('id', userId);
+
+  // Surface the error immediately — if this update fails silently, the user will
+  // see onboarding on every login because onboarding_complete stays false in DB.
+  if (updateError) {
+    console.error('[saveOnboardingProfile] Failed to update users table:', updateError);
+    throw new Error(`Failed to save onboarding: ${updateError.message}`);
+  }
   
   // 2. Update public.profiles
   await supabase.from('profiles').upsert({
