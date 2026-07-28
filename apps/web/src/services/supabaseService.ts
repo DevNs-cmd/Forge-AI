@@ -118,10 +118,27 @@ export const signUpUser = async (email: string, password: string, fullName: stri
   }
 };
 
-export const signInUser = async (email: string, password: string) => {
+export const signInUser = async (emailOrUsername: string, password: string) => {
   try {
+    let emailToUse = emailOrUsername.trim();
+
+    // If input is a username (no '@'), look up registered email from public.users table
+    if (!emailToUse.includes('@')) {
+      const { data: userRow } = await supabase
+        .from('users')
+        .select('email')
+        .eq('username', emailToUse)
+        .maybeSingle();
+
+      if (userRow?.email) {
+        emailToUse = userRow.email;
+      } else {
+        emailToUse = `${emailToUse}@forge.os`;
+      }
+    }
+
     const { data, error } = await supabase.auth.signInWithPassword({
-      email,
+      email: emailToUse,
       password
     });
     if (error) throw error;

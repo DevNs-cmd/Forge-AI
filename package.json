@@ -10,7 +10,9 @@
     "dev:web": "npm run dev -w apps/web",
     "dev:ai": "cd apps/ai-service && ./.venv/bin/python -m uvicorn app.main:app --reload --port 8000",
     "dev": "concurrently \"npm run dev:web\" \"npm run dev:ai\"",
-    "build": "npm run build --workspaces"
+    "build": "npm run build --workspaces",
+    "monitoring:up": "docker compose -f monitoring/docker-compose.monitoring.yml up -d",
+    "monitoring:down": "docker compose -f monitoring/docker-compose.monitoring.yml down"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

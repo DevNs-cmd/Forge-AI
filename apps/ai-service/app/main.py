@@ -1,7 +1,12 @@
-from fastapi import FastAPI, HTTPException, Depends, Security
+import logging
+import sys
+import time
+from fastapi import FastAPI, HTTPException, Depends, Security, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.config import settings
 from app.auth import get_current_user, require_roles, UserSession
@@ -9,11 +14,43 @@ from app.services.ai_service import ai_service
 from app.repositories.repository import ai_repository
 from app.graph import forge_ai_app, AgentState
 
+# ── Structured JSON logging (Loki-friendly) ────────────────────────────────────
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        import json
+        log_obj = {
+            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "service": "forge-ai-service",
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            log_obj["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_obj)
+
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(JsonFormatter())
+logging.basicConfig(level=logging.INFO, handlers=[handler])
+logger = logging.getLogger("forge")
+
+# ── FastAPI App ────────────────────────────────────────────────────────────────
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
     description="Production Groq API & LangGraph Multi-Agent Engine for Project FORGE"
 )
+
+# ── Prometheus Metrics — exposes /metrics ──────────────────────────────────────
+Instrumentator(
+    should_group_status_codes=False,
+    should_ignore_untemplated=True,
+    should_respect_env_var=False,
+    should_instrument_requests_inprogress=True,
+    excluded_handlers=["/metrics", "/health"],
+    inprogress_name="http_requests_in_progress",
+    inprogress_labels=True,
+).instrument(app).expose(app, endpoint="/metrics", tags=["monitoring"])
 
 # Enable CORS for Next.js web client
 origins = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]

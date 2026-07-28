@@ -285,24 +285,31 @@ export const useForgeStore = create<ForgeStore>()(
         set({ isLoading: true, errorMessage: null });
         try {
           await signUpUser(email, pass, fullName, username, "founder");
-          const newUserProfile: UserProfile = {
-            id: `usr-${Date.now()}`,
-            userId: `usr-${Date.now()}`,
-            username,
-            fullName,
-            email,
-            onboardingComplete: false,
-            profileCompleted: false
-          };
-          set({
-            currentUser: newUserProfile,
-            isLoggedIn: true,
-            showAuthModal: false,
-            showOnboardingModal: true,
-            viewMode: "app",
-            isLoading: false
-          });
-          return { success: true, message: `Account created successfully! Please complete your profile.` };
+
+          // Get the real Supabase session so we have the correct UUID
+          const { getCurrentSession, ensureUserProfileExists } = await import("../services/supabaseService");
+          const session = await getCurrentSession();
+
+          if (session?.user) {
+            const profile = await ensureUserProfileExists(session.user);
+            set({
+              currentUser: profile,
+              isLoggedIn: true,
+              showAuthModal: false,
+              showOnboardingModal: true,
+              viewMode: "app",
+              isLoading: false
+            });
+          } else {
+            // Fallback — auth may still be settling (e.g. email confirmation required)
+            set({
+              isLoggedIn: false,
+              showAuthModal: false,
+              isLoading: false,
+              errorMessage: "Account created! Please check your email to confirm, then log in."
+            });
+          }
+          return { success: true, message: `Account created! Please complete your profile.` };
         } catch (e: any) {
           set({ isLoading: false, errorMessage: e.message });
           return { success: false, message: e.message || "Registration failed" };
@@ -312,34 +319,30 @@ export const useForgeStore = create<ForgeStore>()(
       loginUser: async (emailOrUser, pass) => {
         set({ isLoading: true, errorMessage: null });
         try {
-          const email = emailOrUser.includes("@") ? emailOrUser : `${emailOrUser}@forge.os`;
-          await signInUser(email, pass);
-          // Load profile directly from DB — never inject default values
-          const users = await fetchUserProfiles();
-          const matched = users.find(u => u.email === email || u.username === emailOrUser);
+          const { signInUser, getCurrentSession, ensureUserProfileExists } = await import("../services/supabaseService");
+          await signInUser(emailOrUser, pass);
 
-          if (!matched) {
-            // Profile not in DB yet (extremely rare edge case during sign-up race).
-            // Let initializeAuth / subscribeToAuthChanges handle the state once the session settles.
-            set({ isLoading: false });
-            return { success: true, message: "Logging you in..." };
+          const session = await getCurrentSession();
+          if (!session?.user) {
+            throw new Error("Login succeeded but session could not be established.");
           }
 
-          const userRole = matched.role || "founder";
-          const needsOnboarding = !matched.onboardingComplete;
+          const profile = await ensureUserProfileExists(session.user);
+          const userRole: UserRole = profile.role || "founder";
+          const isRoleComplete = Boolean(profile.onboardingComplete && profile.role);
           const targetModule: CoreModuleType = userRole === "admin" ? "admin-os" : (userRole === "mentor" ? "mentor-hub" : "dashboard");
 
           set({
-            currentUser: matched,
+            currentUser: profile,
             isLoggedIn: true,
             activeRole: userRole,
             activeModule: targetModule,
             showAuthModal: false,
-            showOnboardingModal: needsOnboarding,
+            showOnboardingModal: !isRoleComplete,
             viewMode: "app",
             isLoading: false
           });
-          return { success: true, message: `Welcome back, ${matched.fullName}!` };
+          return { success: true, message: `Welcome back, ${profile.fullName || profile.username}!` };
         } catch (e: any) {
           set({ isLoading: false, errorMessage: e.message });
           return { success: false, message: e.message || "Authentication failed. Incorrect email or password." };

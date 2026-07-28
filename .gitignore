@@ -17,6 +17,9 @@ venv/
 env/
 .pytest_cache/
 .env
+.env*.local
+.env.local
+
 
 # OS files
 .DS_Store
