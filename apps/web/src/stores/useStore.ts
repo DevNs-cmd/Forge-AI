@@ -11,12 +11,24 @@ import {
   FounderCandidate,
   BuilderProfile,
   InvestorProfile,
+  MentorProfile,
   ServiceProvider,
   Syndicate,
-  AcquisitionListing
+  AcquisitionListing,
+  UserRole
 } from "@project-forge/validation";
-import { supabase } from "@/lib/supabaseClient";
-
+import { 
+  fetchUserProfiles, 
+  fetchBuilderProfiles, 
+  fetchInvestorProfiles, 
+  fetchIdeasFromDB,
+  createIdeaInDB,
+  toggleVoteInDB,
+  signUpUser,
+  signInUser,
+  signOutUser,
+  supabase
+} from "../services/supabaseService";
 
 export type CoreModuleType = 
   | "dashboard"
@@ -30,61 +42,80 @@ export type CoreModuleType =
   | "services-marketplace"
   | "founder-os"
   | "syndicates"
-  | "acquisition-marketplace";
+  | "acquisition-marketplace"
+  | "mentor-hub"
+  | "admin-os"
+  | "settings";
 
 interface RegisteredUser {
   username: string;
   email: string;
   fullName: string;
   passwordHash: string;
-  role: "user" | "builder" | "investor" | "admin";
+  role: UserRole;
 }
 
 interface ForgeStore {
   // Authentication & Session
   currentUser: UserProfile | null;
   isLoggedIn: boolean;
+  isAuthInitializing: boolean;
   registeredUsers: RegisteredUser[];
   showAuthModal: boolean;
   authModalMode: "login" | "register";
+  isLoading: boolean;
+  errorMessage: string | null;
+  
+  // Landing Page vs App View
+  viewMode: "landing" | "app";
+  showOnboardingModal: boolean;
+  isOnboarded: boolean;
   
   // Navigation & Space Context
-  activeRole: "user" | "builder" | "investor";
+  activeRole: UserRole;
   activeContext: "personal" | "company";
   activeModule: CoreModuleType;
   
-  // Datasets for all 10 Core Modules
+  // Datasets
   ideas: Idea[];
-  upvotedIdeaIds: string[];
   experiments: ValidationExperiment[];
   evidence: ValidationEvidence[];
   founderCandidates: FounderCandidate[];
   builderProfiles: BuilderProfile[];
   investorProfiles: InvestorProfile[];
+  mentorProfiles: MentorProfile[];
   serviceProviders: ServiceProvider[];
   syndicates: Syndicate[];
   acquisitions: AcquisitionListing[];
   startups: Startup[];
   documents: WorkspaceDocument[];
   tasks: WorkspaceTask[];
+  aiHistory: any[];
+  platformAnalytics: any;
   
-  // Active Selection Handles
+  // Handles
   activeIdeaId: string | null;
   activeStartupId: string | null;
   
   // Actions
-  setShowAuthModal: (show: boolean, mode?: "login" | "register") => void;
-  registerUser: (newUser: RegisteredUser) => { success: boolean; message: string };
-  loginUser: (identifier: string, pass: string) => { success: boolean; message: string };
-  logoutUser: () => void;
+  initializeAuth: () => Promise<void>;
+  setViewMode: (mode: "landing" | "app") => void;
+  setShowOnboardingModal: (show: boolean) => void;
+  completeOnboarding: (data: any) => Promise<void>;
+  saveAiHistory: (promptType: string, promptContent: string, responseContent: any, providerUsed?: string) => Promise<void>;
   
-  setActiveRole: (role: "user" | "builder" | "investor") => void;
+  setShowAuthModal: (show: boolean, mode?: "login" | "register") => void;
+  registerUser: (newUser: { username: string; email: string; fullName: string; pass: string; role?: UserRole }) => Promise<{ success: boolean; message: string }>;
+  loginUser: (emailOrUser: string, pass: string) => Promise<{ success: boolean; message: string }>;
+  logoutUser: () => Promise<void>;
+  
+  setActiveRole: (role: UserRole) => void;
+  changeUserRole: (newRole: UserRole) => Promise<void>;
   setActiveContext: (context: "personal" | "company") => void;
   setActiveModule: (module: CoreModuleType) => void;
   
-  fetchIdeas: () => Promise<void>;
-  addIdea: (idea: Idea) => void;
-  upvoteIdea: (ideaId: string) => void;
+  addIdea: (idea: Partial<Idea>) => Promise<void>;
+  upvoteIdeaToggle: (ideaId: string) => Promise<void>;
   updateIdea: (ideaId: string, updates: Partial<Idea>) => void;
   setActiveIdeaId: (id: string | null) => void;
   
@@ -92,436 +123,324 @@ interface ForgeStore {
   updateExperiment: (expId: string, updates: Partial<ValidationExperiment>) => void;
   addEvidence: (ev: ValidationEvidence) => void;
   
-  addStartup: (startup: Startup) => void;
+  addStartup: (startup: Partial<Startup>) => void;
   setActiveStartupId: (id: string | null) => void;
   
   addDocument: (doc: WorkspaceDocument) => void;
   updateDocument: (docId: string, updates: Partial<WorkspaceDocument>) => void;
   addTask: (task: WorkspaceTask) => void;
   updateTask: (taskId: string, updates: Partial<WorkspaceTask>) => void;
+  
+  loadDatabaseState: () => Promise<void>;
 }
 
 export const useForgeStore = create<ForgeStore>()(
   persist(
     (set, get) => ({
-      // Default Session State
-      currentUser: {
-        id: "usr-demo",
-        userId: "user-123",
-        username: "demo_founder",
-        fullName: "Alex Rivera",
-        email: "alex@forge.os",
-        role: "user",
-        headline: "Serial Entrepreneur & AI Architect"
-      },
-      isLoggedIn: true,
-      registeredUsers: [
-        {
-          username: "demo_founder",
-          email: "alex@forge.os",
-          fullName: "Alex Rivera",
-          passwordHash: "password123",
-          role: "user"
-        }
-      ],
+      // Default Session State (Unauthenticated by default)
+      currentUser: null,
+      isLoggedIn: false,
+      registeredUsers: [],
       showAuthModal: false,
       authModalMode: "login",
+      isLoading: false,
+      errorMessage: null,
+      isAuthInitializing: true,
       
-      activeRole: "user",
+      // View & Onboarding State
+      viewMode: "landing",
+      showOnboardingModal: false,
+      isOnboarded: false,
+
+      // Datasets & Analytics
+      aiHistory: [],
+      platformAnalytics: null,
+
+      activeRole: "founder",
       activeContext: "personal",
       activeModule: "dashboard",
-      upvotedIdeaIds: [],
+
+      initializeAuth: async () => {
+        set({ isAuthInitializing: true });
+        try {
+          const { getCurrentSession, getCurrentUserProfile, subscribeToAuthChanges } = await import("../services/supabaseService");
+          const session = await getCurrentSession();
+          
+          if (session?.user) {
+            const { ensureUserProfileExists } = await import("../services/supabaseService");
+            const profile = await ensureUserProfileExists(session.user);
+            const userRole: UserRole = profile.role || "founder";
+            const isRoleComplete = Boolean(profile.onboardingComplete && profile.role);
+            const targetModule: CoreModuleType = userRole === "mentor" ? "mentor-hub" : (userRole === "admin" ? "admin-os" : "dashboard");
+
+            set({
+              currentUser: profile,
+              isLoggedIn: true,
+              activeRole: userRole,
+              activeModule: targetModule,
+              viewMode: "app",
+              showAuthModal: false,
+              showOnboardingModal: !isRoleComplete,
+              isAuthInitializing: false
+            });
+          } else {
+            set({ currentUser: null, isLoggedIn: false, isAuthInitializing: false });
+          }
+
+          // Subscribe to auth state changes for seamless session restoration
+          subscribeToAuthChanges(async (event, session) => {
+            if (event === "SIGNED_OUT") {
+              set({
+                currentUser: null,
+                isLoggedIn: false,
+                viewMode: "landing",
+                showAuthModal: false,
+                showOnboardingModal: false
+              });
+            } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+              if (session?.user) {
+                const { ensureUserProfileExists } = await import("../services/supabaseService");
+                const profile = await ensureUserProfileExists(session.user);
+                const userRole: UserRole = profile.role || "founder";
+                const isRoleComplete = Boolean(profile.onboardingComplete && profile.role);
+                const targetModule: CoreModuleType = userRole === "mentor" ? "mentor-hub" : (userRole === "admin" ? "admin-os" : "dashboard");
+                set({
+                  currentUser: profile,
+                  isLoggedIn: true,
+                  activeRole: userRole,
+                  activeModule: targetModule,
+                  viewMode: "app",
+                  showAuthModal: false,
+                  showOnboardingModal: !isRoleComplete,
+                  isAuthInitializing: false
+                });
+              }
+            }
+          });
+        } catch (e) {
+          set({ isAuthInitializing: false });
+        }
+      },
       
-      // Default Seed Data for 10 Modules
-      ideas: [
-        {
-          id: "idea-1",
-          ownerId: "user-123",
-          ownerName: "Alex Rivera",
-          title: "DirectFarm Logistics",
-          oneLiner: "Automated logistics connection directly between micro-farms and local restaurants.",
-          problemStatement: "Small farms lose up to 30% of margins using standard commercial aggregators and face severe shipping delays.",
-          solution: "A localized real-time delivery dispatcher app that group-schedules weekly driver routes from farms to urban hubs.",
-          status: "refining",
-          readinessScore: 45,
-          upvotes: 28,
-          competitors: ["DoorDash Drive", "LocalBounty", "Farm2Table Direct"],
-          icp: "Organic farmers and restaurant kitchen managers.",
-          targetMarket: "$850M addressable local logistics market."
-        },
-        {
-          id: "idea-2",
-          ownerId: "usr-456",
-          ownerName: "Sarah Chen",
-          title: "CodeAudit AI",
-          oneLiner: "Autonomous AI security compliance auditing for Next.js and FastAPI codebases.",
-          problemStatement: "Startups spend weeks preparing SOC2 and ISO compliance documentation before Enterprise deals.",
-          solution: "Continuous background agent that auto-scans pull requests and generates live compliance data rooms.",
-          status: "validated",
-          readinessScore: 85,
-          upvotes: 64,
-          competitors: ["Vanta", "Drata", "Snyk"],
-          icp: "Seed-stage CTOs selling to Enterprise customers.",
-          targetMarket: "$4.2B Global Compliance Automation Market."
-        }
-      ],
+      setViewMode: (mode) => set({ viewMode: mode }),
+      setShowOnboardingModal: (show) => set({ showOnboardingModal: show }),
+      
+      completeOnboarding: async (data) => {
+        const state = get();
+        set({ isLoading: true, errorMessage: null });
+        try {
+          const role = (data.role || state.currentUser?.role || "founder") as UserRole;
+          if (!state.currentUser?.userId) {
+            throw new Error("No authenticated user found. Please log in again.");
+          }
+          const { saveOnboardingProfile } = await import("../services/supabaseService");
+          // This throws if the DB update fails (e.g. RLS blocks it), so we never
+          // silently proceed with onboardingComplete:true if the DB disagrees.
+          await saveOnboardingProfile(state.currentUser.userId, { ...data, role });
 
-      founderCandidates: [
-        {
-          id: "cand-1",
-          name: "Marcus Vance",
-          avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150",
-          roleTitle: "Technical Co-founder / Backend Lead",
-          skills: ["NestJS", "PostgreSQL", "LangGraph", "Docker"],
-          commitment: "Full-time",
-          workingStyle: "Asynchronous & Fast Prototyping",
-          riskTolerance: "High",
-          matchScore: 94,
-          bio: "Ex-Stripe Senior Engineer. Built high-scale financial microservices handling $10M+ daily volume.",
-          location: "San Francisco, CA (Remote)"
-        },
-        {
-          id: "cand-2",
-          name: "Elena Rostova",
-          avatarUrl: "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150",
-          roleTitle: "Growth & Product Co-founder",
-          skills: ["Product Strategy", "B2B SaaS Growth", "Investor Outreach"],
-          commitment: "Full-time",
-          workingStyle: "Metrics-Driven & Agile Sprints",
-          riskTolerance: "High",
-          matchScore: 89,
-          bio: "Scaled a B2B SaaS startup from 0 to $1.5M ARR in 18 months. Passionate about AI startup ecosystems.",
-          location: "New York, NY"
+          const targetModule: CoreModuleType = role === "admin" ? "admin-os" : (role === "mentor" ? "mentor-hub" : "dashboard");
+          // Mirror the successful DB write into local state.
+          // Future logins read from Supabase; this just avoids a round-trip.
+          set((s) => ({
+            activeRole: role,
+            activeModule: targetModule,
+            isOnboarded: true,
+            showOnboardingModal: false,
+            viewMode: "app",
+            isLoading: false,
+            errorMessage: null,
+            currentUser: s.currentUser
+              ? { ...s.currentUser, role, onboardingComplete: true, profileCompleted: true }
+              : null
+          }));
+        } catch (e: any) {
+          // Surface the error so the user knows something went wrong.
+          // The modal stays open so they can retry.
+          console.error("[completeOnboarding] error:", e);
+          set({ isLoading: false, errorMessage: e.message || "Failed to save your profile. Please try again." });
         }
-      ],
+      },
 
-      builderProfiles: [
-        {
-          id: "build-1",
-          name: "David Kim",
-          title: "Full-Stack Next.js & UI Architect",
-          avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150",
-          primarySkills: ["Next.js 15", "Tailwind CSS", "Zustand", "Framer Motion"],
-          hourlyRate: "$65/hr",
-          equityPreference: "Equity + Cash Split",
-          rating: 4.9,
-          completedMissions: 18,
-          bio: "Frontend specialist focused on ultra-premium SaaS UI and responsive dashboard engines."
-        },
-        {
-          id: "build-2",
-          name: "Aisha Patel",
-          title: "AI Engineer & LangGraph Specialist",
-          avatarUrl: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150",
-          primarySkills: ["Python", "FastAPI", "LangGraph", "Qdrant", "Redis"],
-          hourlyRate: "$80/hr",
-          equityPreference: "Equity Only / Co-founder Track",
-          rating: 5.0,
-          completedMissions: 12,
-          bio: "Builds production-grade multi-agent autonomous workflows and vector retrieval systems."
-        }
-      ],
-
-      investorProfiles: [
-        {
-          id: "inv-1",
-          name: "Vanguard Seed Fund",
-          firm: "Vanguard Ventures",
-          type: "VC",
-          checkSizeRange: "$250k - $1.5M",
-          preferredStages: ["Ideation", "Validation", "Formation"],
-          theses: ["B2B SaaS", "AI Agents", "Logistics & Supply Chain"],
-          portfolioCount: 42,
-          avatarUrl: "https://images.unsplash.com/photo-1560250097-0b93528c311a?w=150",
-          location: "Silicon Valley, CA"
-        },
-        {
-          id: "inv-2",
-          name: "Sophia Zhang",
-          firm: "Angel Syndicate Lead",
-          type: "Angel",
-          checkSizeRange: "$25k - $100k",
-          preferredStages: ["Validation", "MVP"],
-          theses: ["Developer Tools", "AI Infrastructure", "Fintech"],
-          portfolioCount: 19,
-          avatarUrl: "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150",
-          location: "Boston, MA"
-        }
-      ],
-
-      serviceProviders: [
-        {
-          id: "srv-1",
-          name: "Clerky Legal Incorporation",
-          category: "Legal & Incorporation",
-          offerDetails: "Form Delaware C-Corp with founder stock issuance and IP assignment agreements.",
-          perksValue: "$200 Discount + Free Registered Agent",
-          verifiedBadge: true,
-          logoUrl: "https://images.unsplash.com/photo-1450133064473-71024230f91b?w=150"
-        },
-        {
-          id: "srv-2",
-          name: "AWS Activate for Startups",
-          category: "AWS/Cloud Credits",
-          offerDetails: "Cloud infrastructure credits, technical support, and architectural reviews.",
-          perksValue: "$10,000 Free Credits",
-          verifiedBadge: true,
-          logoUrl: "https://images.unsplash.com/photo-1607799279861-4dd421887fb3?w=150"
-        }
-      ],
-
-      syndicates: [
-        {
-          id: "syn-1",
-          name: "AI Founders Syndicate I",
-          leadName: "Sophia Zhang",
-          targetAllocation: "$500,000",
-          committedAmount: "$380,000",
-          membersCount: 34,
-          focusSector: "Autonomous AI Agents",
-          status: "Open"
-        }
-      ],
-
-      acquisitions: [
-        {
-          id: "acq-1",
-          title: "SaaS Metrics Bot (Micro-SaaS)",
-          category: "B2B SaaS",
-          arr: "$120,000",
-          askingPrice: "$450,000",
-          profitMargin: "82%",
-          techStack: ["Next.js", "Stripe", "PostgreSQL"],
-          status: "Listed"
-        }
-      ],
-
-      experiments: [
-        {
-          id: "exp-1",
-          ideaId: "idea-1",
-          title: "Customer Discovery Interviews",
-          hypothesis: "At least 7 out of 10 kitchen managers will list shipping commissions as a top-3 operational pain point.",
-          metricToTrack: "Percentage ranking margin loss in top-3 issues",
-          targetValue: "70%",
-          currentValue: "80%",
-          status: "completed",
-          result: "validated",
-          notes: "Completed 10 interviews. Highly positive validation signals."
-        }
-      ],
-
-      evidence: [
-        {
-          id: "ev-1",
-          experimentId: "exp-1",
-          type: "interview",
-          sourceName: "Chef Mark, Green Bistro",
-          description: "Mark confirmed he would pay up to 10% commission for local direct delivery instead of 25% to major aggregators.",
-          strength: "high"
-        }
-      ],
-
+      ideas: [],
+      founderCandidates: [],
+      builderProfiles: [],
+      investorProfiles: [],
+      mentorProfiles: [],
+      experiments: [],
+      evidence: [],
+      serviceProviders: [],
+      syndicates: [],
+      acquisitions: [],
       startups: [],
-      documents: [
-        {
-          id: "doc-1",
-          startupId: "startup-placeholder",
-          title: "Forge Operating Blueprint",
-          content: "# Forge Operating Blueprint\n\n1. Phase 1: MVP Validation Flow.\n2. Phase 2: Builder Talent Sourcing.\n3. Phase 3: Investor Capital Pipeline.",
-          category: "strategy",
-          authorId: "user-123"
-        }
-      ],
-
-      tasks: [
-        {
-          id: "task-1",
-          startupId: "startup-placeholder",
-          title: "Set up waitlist landing page",
-          description: "Create landing page template routes for waitlist tests.",
-          status: "todo",
-          priority: "high"
-        }
-      ],
-
-      activeIdeaId: "idea-1",
+      documents: [],
+      tasks: [],
+      
+      activeIdeaId: null,
       activeStartupId: null,
-
-      // Authentication Actions
+      
+      // Actions
       setShowAuthModal: (show, mode = "login") => set({ showAuthModal: show, authModalMode: mode }),
       
-      registerUser: (newUser) => {
-        const state = get();
-        const existing = state.registeredUsers.find(
-          u => u.username.toLowerCase() === newUser.username.toLowerCase() || u.email.toLowerCase() === newUser.email.toLowerCase()
-        );
-
-        if (existing) {
-          return { success: false, message: `Username or Email '${newUser.username}' is already registered!` };
+      registerUser: async ({ username, email, fullName, pass, role = "founder" }) => {
+        set({ isLoading: true, errorMessage: null });
+        try {
+          await signUpUser(email, pass, fullName, username, "founder");
+          const newUserProfile: UserProfile = {
+            id: `usr-${Date.now()}`,
+            userId: `usr-${Date.now()}`,
+            username,
+            fullName,
+            email,
+            onboardingComplete: false,
+            profileCompleted: false
+          };
+          set({
+            currentUser: newUserProfile,
+            isLoggedIn: true,
+            showAuthModal: false,
+            showOnboardingModal: true,
+            viewMode: "app",
+            isLoading: false
+          });
+          return { success: true, message: `Account created successfully! Please complete your profile.` };
+        } catch (e: any) {
+          set({ isLoading: false, errorMessage: e.message });
+          return { success: false, message: e.message || "Registration failed" };
         }
-
-        const registeredUsers = [...state.registeredUsers, newUser];
-        const userProfile: UserProfile = {
-          id: `usr-${Date.now()}`,
-          userId: `user-${Date.now()}`,
-          username: newUser.username,
-          fullName: newUser.fullName,
-          email: newUser.email,
-          role: newUser.role,
-          headline: `Forge ${newUser.role} member`
-        };
-
-        set({
-          registeredUsers,
-          currentUser: userProfile,
-          isLoggedIn: true,
-          showAuthModal: false
-        });
-
-        return { success: true, message: "Registration successful! Welcome to Forge OS." };
       },
 
-      loginUser: (identifier, pass) => {
-        const state = get();
-        const userMatch = state.registeredUsers.find(
-          u => (u.username.toLowerCase() === identifier.toLowerCase() || u.email.toLowerCase() === identifier.toLowerCase())
-        );
+      loginUser: async (emailOrUser, pass) => {
+        set({ isLoading: true, errorMessage: null });
+        try {
+          const email = emailOrUser.includes("@") ? emailOrUser : `${emailOrUser}@forge.os`;
+          await signInUser(email, pass);
+          // Load profile directly from DB — never inject default values
+          const users = await fetchUserProfiles();
+          const matched = users.find(u => u.email === email || u.username === emailOrUser);
 
-        if (!userMatch) {
-          return { success: false, message: "User not found. Please register a new account first." };
+          if (!matched) {
+            // Profile not in DB yet (extremely rare edge case during sign-up race).
+            // Let initializeAuth / subscribeToAuthChanges handle the state once the session settles.
+            set({ isLoading: false });
+            return { success: true, message: "Logging you in..." };
+          }
+
+          const userRole = matched.role || "founder";
+          const needsOnboarding = !matched.onboardingComplete;
+          const targetModule: CoreModuleType = userRole === "admin" ? "admin-os" : (userRole === "mentor" ? "mentor-hub" : "dashboard");
+
+          set({
+            currentUser: matched,
+            isLoggedIn: true,
+            activeRole: userRole,
+            activeModule: targetModule,
+            showAuthModal: false,
+            showOnboardingModal: needsOnboarding,
+            viewMode: "app",
+            isLoading: false
+          });
+          return { success: true, message: `Welcome back, ${matched.fullName}!` };
+        } catch (e: any) {
+          set({ isLoading: false, errorMessage: e.message });
+          return { success: false, message: e.message || "Authentication failed. Incorrect email or password." };
         }
-
-        if (userMatch.passwordHash !== pass) {
-          return { success: false, message: "Incorrect password. Please try again." };
-        }
-
-        const userProfile: UserProfile = {
-          id: `usr-${Date.now()}`,
-          userId: `user-${Date.now()}`,
-          username: userMatch.username,
-          fullName: userMatch.fullName,
-          email: userMatch.email,
-          role: userMatch.role,
-          headline: `Forge ${userMatch.role} member`
-        };
-
-        set({
-          currentUser: userProfile,
-          isLoggedIn: true,
-          showAuthModal: false
-        });
-
-        return { success: true, message: `Welcome back, ${userMatch.fullName}!` };
       },
 
-      logoutUser: () => set({ currentUser: null, isLoggedIn: false }),
+      logoutUser: async () => {
+        try {
+          await signOutUser();
+        } catch (e) {
+          // Ignore
+        }
+        set({ 
+          currentUser: null, 
+          isLoggedIn: false, 
+          viewMode: "landing", 
+          showAuthModal: false, 
+          showOnboardingModal: false 
+        });
+      },
 
-      // Navigation Actions
       setActiveRole: (role) => set({ activeRole: role }),
+      changeUserRole: async (newRole: UserRole) => {
+        const state = get();
+        const userId = state.currentUser?.userId;
+        if (!userId) return;
+
+        const targetModule: CoreModuleType = newRole === "mentor" ? "mentor-hub" : (newRole === "admin" ? "admin-os" : "dashboard");
+        set((s) => ({
+          activeRole: newRole,
+          activeModule: targetModule,
+          currentUser: s.currentUser ? { ...s.currentUser, role: newRole } : null
+        }));
+
+        try {
+          const { updateUserRole } = await import("../services/supabaseService");
+          await updateUserRole(userId, newRole);
+        } catch (e) {
+          console.warn("Failed to persist role change in Supabase", e);
+        }
+      },
       setActiveContext: (context) => set({ activeContext: context }),
       setActiveModule: (module) => set({ activeModule: module }),
 
-      fetchIdeas: async () => {
-        try {
-          const { data, error } = await supabase
-            .from("ideas")
-            .select("*")
-            .order("created_at", { ascending: false });
-
-          if (error) {
-            console.error("Error fetching ideas from Supabase:", error);
-            return;
-          }
-
-          if (data && data.length > 0) {
-            const mappedIdeas = data.map((item: any) => ({
-              id: item.id,
-              ownerId: item.owner_id,
-              ownerName: item.owner_name,
-              title: item.title,
-              oneLiner: item.one_liner,
-              problemStatement: item.problem_statement,
-              solution: item.solution,
-              status: item.status,
-              readinessScore: item.readiness_score,
-              upvotes: item.upvotes,
-              competitors: item.competitors || [],
-              icp: item.icp,
-              targetMarket: item.target_market
-            }));
-            set({ ideas: mappedIdeas });
-          }
-        } catch (err) {
-          console.error("Failed to connect or fetch from Supabase:", err);
-        }
-      },
-
-      // Entity Actions
-      addIdea: async (idea) => {
-        // Optimistic UI updates
-        set((state) => ({ 
-          ideas: [idea, ...state.ideas], 
-          activeIdeaId: idea.id || null 
-        }));
-
-        try {
-          const { error } = await supabase.from("ideas").insert([{
-            id: idea.id,
-            owner_id: idea.ownerId,
-            owner_name: idea.ownerName,
-            title: idea.title,
-            one_liner: idea.oneLiner,
-            problem_statement: idea.problemStatement,
-            solution: idea.solution,
-            status: idea.status,
-            readiness_score: idea.readinessScore,
-            upvotes: idea.upvotes,
-            competitors: idea.competitors,
-            icp: idea.icp,
-            target_market: idea.targetMarket
-          }]);
-          if (error) {
-            console.error("Error inserting idea in Supabase:", error);
-          }
-        } catch (err) {
-          console.error("Failed to insert idea in Supabase:", err);
-        }
-      },
-      
-      upvoteIdea: async (ideaId) => {
+      addIdea: async (newIdea) => {
         const state = get();
-        if (state.upvotedIdeaIds?.includes(ideaId)) {
-          alert("You have already upvoted this startup concept!");
-          return;
-        }
+        const createdBy = state.currentUser?.userId || "anon-user";
+        const fullIdea: Idea = {
+          id: `idea-${Date.now()}`,
+          ownerId: createdBy,
+          ownerName: state.currentUser?.fullName || "Founder",
+          title: newIdea.title || "Untitled Idea",
+          oneLiner: newIdea.oneLiner || "",
+          problemStatement: newIdea.problemStatement || "",
+          solution: newIdea.solution || "",
+          targetMarket: newIdea.targetMarket,
+          status: newIdea.status || "draft",
+          readinessScore: newIdea.readinessScore || 50,
+          upvotes: 0,
+          competitors: newIdea.competitors || [],
+          tags: newIdea.tags || [],
+          userVoted: false
+        };
 
-        const currentIdea = state.ideas.find(i => i.id === ideaId);
-        const newUpvotes = (currentIdea?.upvotes || 0) + 1;
+        set((s) => ({ ideas: [fullIdea, ...s.ideas], activeIdeaId: fullIdea.id }));
+        
+        // Attempt DB persistence
+        await createIdeaInDB(fullIdea);
+      },
 
-        // Optimistic UI updates
-        set((state) => ({
-          upvotedIdeaIds: [...(state.upvotedIdeaIds || []), ideaId],
-          ideas: state.ideas.map(i => i.id === ideaId ? { ...i, upvotes: newUpvotes } : i)
+      upvoteIdeaToggle: async (ideaId) => {
+        const state = get();
+        const userId = state.currentUser?.userId;
+        if (!userId) return;
+
+        // Optimistic UI update
+        const targetIdea = state.ideas.find(i => i.id === ideaId);
+        if (!targetIdea) return;
+
+        const currentlyVoted = !!targetIdea.userVoted;
+        const updatedUpvotes = currentlyVoted ? Math.max(0, (targetIdea.upvotes || 1) - 1) : (targetIdea.upvotes || 0) + 1;
+
+        set((s) => ({
+          ideas: s.ideas.map(i => i.id === ideaId ? { ...i, userVoted: !currentlyVoted, upvotes: updatedUpvotes } : i)
         }));
 
+        // DB update
         try {
-          const { error } = await supabase
-            .from("ideas")
-            .update({ upvotes: newUpvotes })
-            .eq("id", ideaId);
-          if (error) {
-            console.error("Error upvoting idea in Supabase:", error);
-          }
-        } catch (err) {
-          console.error("Failed to upvote idea in Supabase:", err);
+          const res = await toggleVoteInDB(userId, ideaId);
+          set((s) => ({
+            ideas: s.ideas.map(i => i.id === ideaId ? { ...i, userVoted: res.voted, upvotes: res.newCount } : i)
+          }));
+        } catch (e) {
+          console.warn('Vote toggle DB failed', e);
         }
       },
-      
+
       updateIdea: (ideaId, updates) => set((state) => ({
         ideas: state.ideas.map((id) => id.id === ideaId ? { ...id, ...updates } : id)
       })),
-      
+
       setActiveIdeaId: (id) => set({ activeIdeaId: id }),
 
       addExperiment: (exp) => set((state) => ({ experiments: [...state.experiments, exp] })),
@@ -531,11 +450,24 @@ export const useForgeStore = create<ForgeStore>()(
 
       addEvidence: (ev) => set((state) => ({ evidence: [...state.evidence, ev] })),
 
-      addStartup: (startup) => set((state) => ({ 
-        startups: [startup, ...state.startups], 
-        activeStartupId: startup.id || null 
-      })),
-      
+      addStartup: (startup) => set((state) => {
+        const fullStartup: Startup = {
+          id: startup.id || `startup-${Date.now()}`,
+          name: startup.name || "Untitled Startup",
+          industry: startup.industry || "Tech",
+          description: startup.description || "",
+          stage: startup.stage || "formation",
+          mrr: startup.mrr || 0,
+          valuation: startup.valuation || 0,
+          teamSize: startup.teamSize || 1,
+          createdBy: startup.createdBy || state.currentUser?.userId || "usr-1"
+        };
+        return { 
+          startups: [fullStartup, ...state.startups], 
+          activeStartupId: fullStartup.id || null 
+        };
+      }),
+
       setActiveStartupId: (id) => set({ activeStartupId: id }),
 
       addDocument: (doc) => set((state) => ({ documents: [doc, ...state.documents] })),
@@ -546,7 +478,72 @@ export const useForgeStore = create<ForgeStore>()(
       addTask: (task) => set((state) => ({ tasks: [...state.tasks, task] })),
       updateTask: (taskId, updates) => set((state) => ({
         tasks: state.tasks.map((t) => t.id === taskId ? { ...t, ...updates } : t)
-      }))
+      })),
+
+      saveAiHistory: async (promptType, promptContent, responseContent, providerUsed = "groq") => {
+        const userId = get().currentUser?.userId;
+        if (!userId) return;
+        try {
+          const { saveAIConversation, fetchUserAIHistory } = await import("../services/supabaseService");
+          await saveAIConversation(userId, promptType, promptContent, responseContent, providerUsed);
+          const history = await fetchUserAIHistory(userId);
+          set({ aiHistory: history });
+        } catch (e) {
+          console.warn("Failed to save AI history:", e);
+        }
+      },
+
+      loadDatabaseState: async () => {
+        const state = get();
+        set({ isLoading: true });
+        try {
+          const { 
+            fetchIdeasFromDB, 
+            fetchStartupsFromDB, 
+            fetchBuilderProfiles, 
+            fetchInvestorProfiles, 
+            fetchUserAIHistory,
+            fetchPlatformAnalytics,
+            subscribeToRealtimeTable 
+          } = await import("../services/supabaseService");
+
+          const [dbIdeas, dbStartups, dbBuilders, dbInvestors, analytics] = await Promise.all([
+            fetchIdeasFromDB(state.currentUser?.userId),
+            fetchStartupsFromDB(),
+            fetchBuilderProfiles(),
+            fetchInvestorProfiles(),
+            fetchPlatformAnalytics()
+          ]);
+
+          let userHistory: any[] = [];
+          if (state.currentUser?.userId) {
+            userHistory = await fetchUserAIHistory(state.currentUser.userId);
+          }
+
+          set({
+            ideas: dbIdeas,
+            startups: dbStartups,
+            builderProfiles: dbBuilders,
+            investorProfiles: dbInvestors,
+            aiHistory: userHistory,
+            platformAnalytics: analytics,
+            isLoading: false
+          });
+
+          // Subscribe to Supabase Realtime table changes
+          subscribeToRealtimeTable('ideas', () => {
+            fetchIdeasFromDB(state.currentUser?.userId).then(ideas => set({ ideas }));
+          });
+          subscribeToRealtimeTable('startups', () => {
+            fetchStartupsFromDB().then(startups => set({ startups }));
+          });
+          subscribeToRealtimeTable('votes', () => {
+            fetchIdeasFromDB(state.currentUser?.userId).then(ideas => set({ ideas }));
+          });
+        } catch (e) {
+          set({ isLoading: false });
+        }
+      }
     }),
     {
       name: "forge-os-persistent-store",
@@ -554,3 +551,9 @@ export const useForgeStore = create<ForgeStore>()(
     }
   )
 );
+
+// NOTE: Auth state changes are managed exclusively inside initializeAuth via
+// subscribeToAuthChanges. A second raw onAuthStateChange listener here was
+// removed because it raced with initializeAuth and always overwrote the store
+// with hardcoded `onboardingComplete: false` defaults, causing the onboarding
+// modal to appear on every login regardless of the Supabase DB value.
