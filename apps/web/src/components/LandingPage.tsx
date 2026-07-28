@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import { useForgeStore } from "@/stores/useStore";
+import { useRazorpay } from "@/hooks/useRazorpay";
 import { 
   Rocket, 
   Sparkles, 
@@ -36,6 +37,32 @@ export default function LandingPage() {
   const [contactSubmitted, setContactSubmitted] = useState(false);
   const [activeRoleTab, setActiveRoleTab] = useState<"founder" | "builder" | "investor" | "mentor">("founder");
   const [activeDashTab, setActiveDashTab] = useState<"validation" | "matching" | "capital">("validation");
+
+  // ── Razorpay ──────────────────────────────────────────────────────────────
+  const { initiatePayment } = useRazorpay();
+  const [payingPlan, setPayingPlan] = useState<string | null>(null);  // which plan is processing
+  const [paidPlan, setPaidPlan] = useState<string | null>(null);       // which plan was paid
+  const [payError, setPayError] = useState<string | null>(null);
+
+  const handlePayment = (plan: string, planLabel: string, amountPaise: number) => {
+    setPayingPlan(plan);
+    setPayError(null);
+    initiatePayment({
+      plan,
+      planLabel,
+      amountPaise,
+      onSuccess: (paymentId, orderId) => {
+        console.log("✅ Payment success", { paymentId, orderId });
+        setPaidPlan(plan);
+        setPayingPlan(null);
+        // TODO: call your backend to verify signature & provision access
+      },
+      onFailure: (error) => {
+        if (error !== "Payment cancelled") setPayError(error);
+        setPayingPlan(null);
+      },
+    });
+  };
 
   const toggleFaq = (index: number) => {
     setActiveFaq(activeFaq === index ? null : index);
@@ -490,6 +517,7 @@ export default function LandingPage() {
             <button onClick={() => setShowAuthModal(true, "register")} className="w-full bg-neutral-100 hover:bg-neutral-200 text-neutral-900 font-bold text-xs py-3 rounded-xl transition">
               Get Started Free
             </button>
+            {payError && <p className="text-[10px] text-rose-500 text-center mt-1">{payError}</p>}
           </div>
 
           {/* Pro Founder */}
@@ -503,9 +531,25 @@ export default function LandingPage() {
               <li className="flex items-center gap-2"><Check size={14} className="text-purple-600" /> Direct Capital Pipeline introductions</li>
               <li className="flex items-center gap-2"><Check size={14} className="text-purple-600" /> Advanced Intelligence OS metrics</li>
             </ul>
-            <button onClick={() => setShowAuthModal(true, "register")} className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs py-3 rounded-xl shadow-md transition">
-              Join Beta Waitlist
+            <button
+              id="pay-pro-btn"
+              disabled={!!payingPlan || paidPlan === "pro"}
+              onClick={() => handlePayment("pro", "Pro Founder", 4900)}
+              className={`w-full font-bold text-xs py-3 rounded-xl shadow-md transition flex items-center justify-center gap-2 ${
+                paidPlan === "pro"
+                  ? "bg-emerald-600 text-white cursor-not-allowed"
+                  : "bg-purple-600 hover:bg-purple-700 text-white disabled:opacity-60 disabled:cursor-not-allowed"
+              }`}
+            >
+              {payingPlan === "pro" ? (
+                <><span className="animate-spin inline-block h-3 w-3 border-2 border-white border-t-transparent rounded-full" /> Processing…</>
+              ) : paidPlan === "pro" ? (
+                "✅ Payment Successful!"
+              ) : (
+                "Subscribe — ₹49/mo (Test Mode)"
+              )}
             </button>
+            {payError && payingPlan !== "pro" && <p className="text-[10px] text-rose-500 text-center mt-1">{payError}</p>}
           </div>
 
           {/* Investor */}
@@ -518,8 +562,23 @@ export default function LandingPage() {
               <li className="flex items-center gap-2"><Check size={14} className="text-purple-600" /> AI pitch deck diligence reports</li>
               <li className="flex items-center gap-2"><Check size={14} className="text-purple-600" /> Syndicate allocation manager</li>
             </ul>
-            <button onClick={() => setShowAuthModal(true, "register")} className="w-full bg-neutral-100 hover:bg-neutral-200 text-neutral-900 font-bold text-xs py-3 rounded-xl transition">
-              Request Access
+            <button
+              id="pay-investor-btn"
+              disabled={!!payingPlan || paidPlan === "investor"}
+              onClick={() => handlePayment("investor", "Investor & Syndicate", 19900)}
+              className={`w-full font-bold text-xs py-3 rounded-xl transition flex items-center justify-center gap-2 ${
+                paidPlan === "investor"
+                  ? "bg-emerald-600 text-white cursor-not-allowed"
+                  : "bg-neutral-900 hover:bg-neutral-700 text-white disabled:opacity-60 disabled:cursor-not-allowed"
+              }`}
+            >
+              {payingPlan === "investor" ? (
+                <><span className="animate-spin inline-block h-3 w-3 border-2 border-white border-t-transparent rounded-full" /> Processing…</>
+              ) : paidPlan === "investor" ? (
+                "✅ Payment Successful!"
+              ) : (
+                "Subscribe — ₹199/mo (Test Mode)"
+              )}
             </button>
           </div>
         </div>
