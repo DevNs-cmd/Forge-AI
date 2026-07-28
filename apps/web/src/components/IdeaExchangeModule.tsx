@@ -1,13 +1,17 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useForgeStore } from "@/stores/useStore";
 import { Lightbulb, ThumbsUp, Sparkles, Plus, Search, ShieldCheck } from "lucide-react";
 
 export default function IdeaExchangeModule() {
-  const { ideas, addIdea, upvoteIdeaToggle, setActiveIdeaId, setActiveModule, currentUser } = useForgeStore();
+  const { ideas, fetchIdeas, addIdea, upvoteIdea, setActiveIdeaId, setActiveModule } = useForgeStore();
   const [searchTerm, setSearchTerm] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
+
+  useEffect(() => {
+    fetchIdeas();
+  }, [fetchIdeas]);
 
   // Form states
   const [title, setTitle] = useState("");
@@ -20,16 +24,22 @@ export default function IdeaExchangeModule() {
     i.oneLiner.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const handleCreate = async (e: React.FormEvent) => {
+  const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title || !oneLiner || !problemStatement || !solution) return;
-    await addIdea({
+    const id = `idea-${Date.now()}`;
+    addIdea({
+      id,
+      ownerId: "user-123",
+      ownerName: "Alex Rivera",
       title,
       oneLiner,
       problemStatement,
       solution,
       status: "draft",
-      readinessScore: 35
+      readinessScore: 25,
+      upvotes: 1,
+      competitors: ["Existing legacy tools"]
     });
     setTitle("");
     setOneLiner("");
@@ -48,18 +58,16 @@ export default function IdeaExchangeModule() {
             <h1 className="text-xl font-bold text-neutral-900 tracking-tight">Idea Exchange</h1>
           </div>
           <p className="text-xs text-neutral-500 mt-1">
-            The world's marketplace for startup concepts. Submit ideas, validate market demand, and single-vote concepts.
+            The world's marketplace for startup concepts. Submit ideas, get AI analysis scores, and validate demand.
           </p>
         </div>
 
-        {currentUser?.role !== 'builder' && (
-          <button
-            onClick={() => setShowAddModal(!showAddModal)}
-            className="bg-brand-600 hover:bg-brand-700 text-white font-bold text-xs py-2 px-3.5 rounded-xl flex items-center gap-1.5 shadow-sm transition"
-          >
-            <Plus size={14} /> Submit New Concept
-          </button>
-        )}
+        <button
+          onClick={() => setShowAddModal(!showAddModal)}
+          className="bg-brand-600 hover:bg-brand-700 text-white font-bold text-xs py-2 px-3.5 rounded-xl flex items-center gap-1.5 shadow-sm transition"
+        >
+          <Plus size={14} /> Submit New Concept
+        </button>
       </div>
 
       {/* Search Bar */}
@@ -160,16 +168,11 @@ export default function IdeaExchangeModule() {
             {/* Card Footer Actions */}
             <div className="pt-3 border-t border-neutral-100 flex items-center justify-between">
               <button
-                onClick={() => upvoteIdeaToggle(idea.id!)}
-                className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition font-semibold ${
-                  idea.userVoted 
-                    ? "bg-brand-600 text-white shadow-sm" 
-                    : "bg-neutral-100 text-neutral-700 hover:bg-brand-50 hover:text-brand-700"
-                }`}
+                onClick={() => upvoteIdea(idea.id!)}
+                className="flex items-center gap-1.5 text-xs text-neutral-600 hover:text-brand-600 bg-neutral-100 hover:bg-brand-50 px-2.5 py-1.5 rounded-lg transition font-semibold"
               >
                 <ThumbsUp size={12} />
-                <span>{idea.upvotes || 0} Upvotes</span>
-                {idea.userVoted && <span className="text-[9px] bg-white/20 px-1 rounded ml-1">Voted</span>}
+                <span>{idea.upvotes} Upvotes</span>
               </button>
 
               <button
